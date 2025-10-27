@@ -5,10 +5,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use echo_shared::{AppConfig, ApiResponse, Session, SessionStatus, PaginationParams, PaginatedResponse, generate_uuid, now_utc};
+use echo_shared::{AppConfig, ApiResponse, Session, SessionStatus, PaginationParams, PaginatedResponse, generate_session_id, now_utc, EchoKitConfig, EchoKitSession, EchoKitSessionStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::{info, warn, error, debug};
 
 #[derive(Debug, Deserialize)]
 pub struct SessionQueryParams {
@@ -24,10 +26,17 @@ pub struct SessionQueryParams {
 pub struct CreateSessionRequest {
     pub device_id: String,
     pub user_id: String,
+    pub config: Option<EchoKitConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EndSessionRequest {
+    pub reason: Option<String>,
 }
 
 // 模拟会话数据存储
 static mut SESSIONS: Option<Vec<Session>> = None;
+static mut ECHOKIT_SESSIONS: Option<HashMap<String, EchoKitSession>> = None;
 
 fn get_mock_sessions() -> &'static mut Vec<Session> {
     unsafe {
@@ -70,6 +79,66 @@ fn get_mock_sessions() -> &'static mut Vec<Session> {
         }
         SESSIONS.as_mut().unwrap()
     }
+}
+
+fn get_echokit_sessions() -> &'static mut HashMap<String, EchoKitSession> {
+    unsafe {
+        if ECHOKIT_SESSIONS.is_none() {
+            ECHOKIT_SESSIONS = Some(HashMap::new());
+        }
+        ECHOKIT_SESSIONS.as_mut().unwrap()
+    }
+}
+
+// 创建新的 EchoKit 会话
+fn create_echokit_session(
+    device_id: String,
+    user_id: String,
+    config: EchoKitConfig,
+) -> EchoKitSession {
+    EchoKitSession {
+        id: generate_session_id(),
+        device_id,
+        user_id,
+        config,
+        status: EchoKitSessionStatus::Initializing,
+        start_time: now_utc(),
+        end_time: None,
+        current_stage: echo_shared::SessionStage::Wakeup,
+        progress: 0.0,
+        transcription: None,
+        response: None,
+        audio_buffer: Vec::new(),
+    }
+}
+
+// 模拟调用 Bridge 服务
+async fn call_bridge_service_start_session(
+    device_id: String,
+    user_id: String,
+    config: EchoKitConfig,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // TODO: 实现实际的 Bridge 服务调用
+    info!("Simulating Bridge service call - start session for device: {}", device_id);
+
+    // 模拟网络延迟
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // 返回模拟的会话 ID
+    Ok(generate_session_id())
+}
+
+async fn call_bridge_service_end_session(
+    session_id: String,
+    reason: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: 实现实际的 Bridge 服务调用
+    info!("Simulating Bridge service call - end session: {} (reason: {})", session_id, reason);
+
+    // 模拟网络延迟
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    Ok(())
 }
 
 // 获取会话列表
@@ -133,23 +202,72 @@ pub async fn get_session(
 pub async fn create_session(
     State(_config): State<AppConfig>,
     Json(payload): Json<CreateSessionRequest>,
-) -> Json<ApiResponse<Session>> {
-    let new_session = Session {
-        id: generate_uuid(),
-        device_id: payload.device_id,
-        user_id: payload.user_id,
-        start_time: now_utc(),
-        end_time: None,
-        duration: None,
-        transcription: None,
-        response: None,
-        status: SessionStatus::Active,
-    };
+) -> Result<Json<ApiResponse<EchoKitSession>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let config = payload.config.unwrap_or_default();
 
-    let sessions = get_mock_sessions();
-    sessions.push(new_session.clone());
+    // 检查设备是否已有活跃会话
+    {
+        let echokit_sessions = get_echokit_sessions();
+        for session in echokit_sessions.values() {
+            if session.device_id == payload.device_id &&
+               (session.status == EchoKitSessionStatus::Active ||
+                session.status == EchoKitSessionStatus::Processing ||
+                session.status == EchoKitSessionStatus::Responding) {
+                let response = ApiResponse::error("Device already has an active session".to_string());
+                return Err((StatusCode::CONFLICT, Json(response)));
+            }
+        }
+    }
 
-    Json(ApiResponse::success(new_session))
+    // 创建 EchoKit 会话
+    let mut echokit_session = create_echokit_session(
+        payload.device_id.clone(),
+        payload.user_id.clone(),
+        config.clone(),
+    );
+
+    // 调用 Bridge 服务启动会话
+    match call_bridge_service_start_session(
+        payload.device_id.clone(),
+        payload.user_id.clone(),
+        config,
+    ).await {
+        Ok(_) => {
+            // Bridge 服务调用成功，更新会话状态
+            echokit_session.status = EchoKitSessionStatus::Active;
+
+            // 存储会话
+            let echokit_sessions = get_echokit_sessions();
+            echokit_sessions.insert(echokit_session.id.clone(), echokit_session.clone());
+
+            // 同时创建传统会话记录用于兼容性
+            let traditional_session = Session {
+                id: echokit_session.id.clone(),
+                device_id: echokit_session.device_id.clone(),
+                user_id: echokit_session.user_id.clone(),
+                start_time: echokit_session.start_time,
+                end_time: None,
+                duration: None,
+                transcription: None,
+                response: None,
+                status: SessionStatus::Active,
+            };
+
+            let sessions = get_mock_sessions();
+            sessions.push(traditional_session);
+
+            info!("Created new EchoKit session {} for device {}",
+                  echokit_session.id, echokit_session.device_id);
+
+            let response = ApiResponse::success(echokit_session);
+            Ok(Json(response))
+        }
+        Err(e) => {
+            error!("Failed to create EchoKit session: {}", e);
+            let response = ApiResponse::error(format!("Failed to create session: {}", e));
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(response)))
+        }
+    }
 }
 
 // 更新会话状态
@@ -190,6 +308,60 @@ pub async fn update_session(
         Ok(Json(ApiResponse::success(session.clone())))
     } else {
         Err(StatusCode::NOT_FOUND)
+    }
+}
+
+// 结束会话 (EchoKit 版本)
+pub async fn end_session(
+    Path(session_id): Path<String>,
+    State(_config): State<AppConfig>,
+    Json(payload): Json<EndSessionRequest>,
+) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let reason = payload.reason.unwrap_or_else(|| "user_request".to_string());
+
+    // 查找 EchoKit 会话
+    let session_info = {
+        let echokit_sessions = get_echokit_sessions();
+        echokit_sessions.get(&session_id).cloned()
+    };
+
+    if let Some(mut session) = session_info {
+        // 调用 Bridge 服务结束会话
+        match call_bridge_service_end_session(session_id.clone(), reason.clone()).await {
+            Ok(_) => {
+                // 更新会话状态
+                session.status = EchoKitSessionStatus::Completed;
+                session.end_time = Some(now_utc());
+
+                // 更新存储
+                let echokit_sessions = get_echokit_sessions();
+                echokit_sessions.insert(session_id.clone(), session.clone());
+
+                // 同时更新传统会话记录
+                let sessions = get_mock_sessions();
+                if let Some(traditional_session) = sessions.iter_mut().find(|s| s.id == session_id) {
+                    traditional_session.status = SessionStatus::Completed;
+                    traditional_session.end_time = Some(now_utc());
+                    if let Some(end_time) = traditional_session.end_time {
+                        let duration = end_time.signed_duration_since(traditional_session.start_time);
+                        traditional_session.duration = Some(duration.num_seconds() as i32);
+                    }
+                }
+
+                info!("Ended EchoKit session {} (reason: {})", session_id, reason);
+
+                let response = ApiResponse::success(());
+                Ok(Json(response))
+            }
+            Err(e) => {
+                error!("Failed to end EchoKit session {}: {}", session_id, e);
+                let response = ApiResponse::error(format!("Failed to end session: {}", e));
+                Err((StatusCode::INTERNAL_SERVER_ERROR, Json(response)))
+            }
+        }
+    } else {
+        let response = ApiResponse::error("Session not found".to_string());
+        Err((StatusCode::NOT_FOUND, Json(response)))
     }
 }
 
@@ -259,6 +431,8 @@ pub fn session_routes() -> Router<AppConfig> {
     Router::new()
         .route("/sessions", get(get_sessions).post(create_session))
         .route("/sessions/stats", get(get_session_stats))
-        .route("/sessions/:id", get(get_session).delete(delete_session))
+        .route("/sessions/:id", get(get_session))
         .route("/sessions/:id", post(update_session))
+        .route("/sessions/:id/end", post(end_session))
+        .route("/sessions/:id", delete(delete_session))
 }

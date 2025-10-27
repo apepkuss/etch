@@ -124,6 +124,7 @@ pub struct Claims {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WebSocketMessage {
+    // 原有消息类型
     DeviceStatusUpdate {
         device_id: String,
         status: DeviceStatus,
@@ -140,6 +141,47 @@ pub enum WebSocketMessage {
         level: NotificationLevel,
         title: String,
         message: String,
+    },
+
+    // EchoKit 集成消息类型
+    EchoKitSessionStart {
+        session_id: String,
+        device_id: String,
+        config: EchoKitConfig,
+    },
+    EchoKitSessionEnd {
+        session_id: String,
+        device_id: String,
+        reason: String,
+    },
+    EchoKitAudioData {
+        device_id: String,
+        session_id: String,
+        audio_data: Vec<u8>,
+        format: AudioFormat,
+    },
+    EchoKitTranscription {
+        session_id: String,
+        device_id: String,
+        text: String,
+        confidence: f32,
+        is_final: bool,
+        timestamp: DateTime<Utc>,
+    },
+    EchoKitResponse {
+        session_id: String,
+        device_id: String,
+        text: String,
+        audio_data: Option<Vec<u8>>,
+        is_complete: bool,
+        timestamp: DateTime<Utc>,
+    },
+    EchoKitError {
+        session_id: String,
+        device_id: String,
+        error_code: String,
+        error_message: String,
+        timestamp: DateTime<Utc>,
     },
 }
 
@@ -303,4 +345,203 @@ pub struct MqttConfig {
 pub struct JwtConfig {
     pub secret: String,
     pub expiration_hours: u64,
+}
+
+// EchoKit 集成相关类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitConfig {
+    pub vad_enabled: bool,
+    pub vad_threshold: f32,
+    pub vad_silence_duration: f32,
+    pub asr_model: String,
+    pub asr_language: String,
+    pub llm_model: String,
+    pub llm_provider: String,
+    pub tts_voice: String,
+    pub tts_provider: String,
+    pub stream_response: bool,
+    pub max_audio_length: f32,
+    pub session_timeout: f32,
+}
+
+impl Default for EchoKitConfig {
+    fn default() -> Self {
+        Self {
+            vad_enabled: true,
+            vad_threshold: 0.5,
+            vad_silence_duration: 1.0,
+            asr_model: "whisper".to_string(),
+            asr_language: "zh".to_string(),
+            llm_model: "gpt-3.5-turbo".to_string(),
+            llm_provider: "openai".to_string(),
+            tts_voice: "zh-CN-female-1".to_string(),
+            tts_provider: "azure".to_string(),
+            stream_response: true,
+            max_audio_length: 30.0,
+            session_timeout: 60.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AudioFormat {
+    PCM16,
+    WAV,
+    Opus,
+    MP3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitSession {
+    pub id: String,
+    pub device_id: String,
+    pub user_id: String,
+    pub config: EchoKitConfig,
+    pub status: EchoKitSessionStatus,
+    pub start_time: DateTime<Utc>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub current_stage: SessionStage,
+    pub progress: f32,
+    pub transcription: Option<String>,
+    pub response: Option<String>,
+    pub audio_buffer: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum EchoKitSessionStatus {
+    Initializing,
+    Active,
+    Processing,
+    Responding,
+    Completed,
+    Failed,
+    Timeout,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitDevice {
+    pub device_id: String,
+    pub websocket_url: String,
+    pub is_connected: bool,
+    pub last_heartbeat: DateTime<Utc>,
+    pub current_session_id: Option<String>,
+    pub audio_format: AudioFormat,
+    pub sample_rate: u32,
+    pub channels: u8,
+}
+
+// EchoKit 服务状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitServiceStatus {
+    pub is_connected: bool,
+    pub websocket_url: String,
+    pub last_heartbeat: DateTime<Utc>,
+    pub active_sessions: u32,
+    pub max_sessions: u32,
+    pub supported_formats: Vec<AudioFormat>,
+    pub service_version: String,
+}
+
+// EchoKit 统计信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitStats {
+    pub total_sessions: u64,
+    pub successful_sessions: u64,
+    pub failed_sessions: u64,
+    pub average_response_time: f32,
+    pub total_audio_processed: f64, // in seconds
+    pub current_active_sessions: u32,
+    pub uptime: f64, // in seconds
+}
+
+// EchoKit 错误类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoKitErrorInfo {
+    pub code: String,
+    pub message: String,
+    pub details: Option<serde_json::Value>,
+    pub timestamp: DateTime<Utc>,
+    pub session_id: Option<String>,
+    pub device_id: Option<String>,
+}
+
+// EchoKit 客户端消息 (发送到 EchoKit Server)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum EchoKitClientMessage {
+    StartSession {
+        session_id: String,
+        device_id: String,
+        config: EchoKitConfig,
+    },
+    EndSession {
+        session_id: String,
+        device_id: String,
+        reason: String,
+    },
+    AudioData {
+        session_id: String,
+        device_id: String,
+        audio_data: Vec<u8>,
+        format: AudioFormat,
+        is_final: bool,
+    },
+    Ping,
+}
+
+// EchoKit 服务端消息 (从 EchoKit Server 接收)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum EchoKitServerMessage {
+    SessionStarted {
+        session_id: String,
+        device_id: String,
+        timestamp: DateTime<Utc>,
+    },
+    SessionEnded {
+        session_id: String,
+        device_id: String,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+    Transcription {
+        session_id: String,
+        device_id: String,
+        text: String,
+        confidence: f32,
+        is_final: bool,
+        timestamp: DateTime<Utc>,
+    },
+    Response {
+        session_id: String,
+        device_id: String,
+        text: String,
+        audio_data: Option<Vec<u8>>,
+        is_complete: bool,
+        timestamp: DateTime<Utc>,
+    },
+    Error {
+        session_id: String,
+        device_id: String,
+        error: EchoKitErrorInfo,
+    },
+    Pong,
+    ServiceStatus {
+        status: EchoKitServiceStatus,
+    },
+}
+
+// 便利函数
+pub fn now_utc() -> DateTime<Utc> {
+    Utc::now()
+}
+
+pub fn generate_session_id() -> String {
+    use uuid::Uuid;
+    Uuid::new_v4().to_string()
+}
+
+pub fn generate_device_id() -> String {
+    use uuid::Uuid;
+    format!("dev_{}", Uuid::new_v4().to_string()[..8].to_lowercase())
 }
