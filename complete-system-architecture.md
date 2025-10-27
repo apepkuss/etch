@@ -26,11 +26,12 @@ graph TB
         Redis[(Redis<br/>缓存<br/>会话存储<br/>实时状态)]
     end
 
-    subgraph "AI推理服务层 - Python实现"
-        ASR[流式ASR服务<br/>语音识别<br/>gRPC/WebSocket接口]
-        DM[Dialogue Manager<br/>对话管理<br/>上下文维护<br/>Rust核心 + Python AI]
-        LLM[LLM推理服务<br/>大语言模型<br/>流式生成]
-        TTS[TTS合成服务<br/>语音合成<br/>Opus输出]
+    subgraph "AI推理服务层 - EchoKit Server"
+        EchoKit[EchoKit Server<br/>WebSocket服务<br/>ws.rs<br/>音频流处理]
+        VAD[VAD 服务<br/>语音活动检测]
+        ASR[ASR 服务<br/>Whisper 语音识别<br/>流式识别]
+        LLM[LLM 推理<br/>大语言模型<br/>流式生成]
+        TTS[TTS 合成<br/>语音合成<br/>Opus输出]
     end
 
     subgraph "设备层"
@@ -57,32 +58,103 @@ graph TB
     MQTT -->|订阅设备消息| Bridge
 
     %% Bridge 音频处理流
-    Bridge -->|gRPC Streaming<br/>音频流| ASR
+    Bridge -->|WebSocket音频流| EchoKit
     Bridge -->|存储会话数据| PG
     Bridge -->|MQTT发布事件| MQTT
 
-    %% AI 推理链路
-    ASR -->|转录文本| DM
-    DM -->|Prompt| LLM
-    LLM -->|响应文本| DM
-    DM -->|待合成文本| TTS
-    TTS -->|Opus音频流| Bridge
+    %% EchoKit AI 推理链路
+    EchoKit -->|音频处理| VAD
+    VAD -->|有效音频| ASR
+    ASR -->|转录文本| LLM
+    LLM -->|响应文本| TTS
+    TTS -->|Opus音频流| EchoKit
+    EchoKit -->|WebSocket音频流| Bridge
 
     %% 样式定义
     classDef frontend fill:#e1f5ff,stroke:#01579b,stroke-width:2px
     classDef rust fill:#ffeaa7,stroke:#d63031,stroke-width:2px
-    classDef python fill:#81ecec,stroke:#00b894,stroke-width:2px
+    classDef echokit fill:#81ecec,stroke:#00b894,stroke-width:2px
     classDef storage fill:#fab1a0,stroke:#e17055,stroke-width:2px
     classDef device fill:#dfe6e9,stroke:#636e72,stroke-width:2px
     classDef middleware fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px
 
     class WebUI frontend
     class Gateway,Bridge rust
-    class ASR,DM,LLM,TTS python
+    class EchoKit,VAD,ASR,LLM,TTS echokit
     class PG,Redis storage
     class Device device
     class MQTT,Nginx middleware
 ```
+
+### 应用服务层详细功能
+
+应用服务层采用 Rust 实现高性能和内存安全，包含 API Gateway 和 Bridge 两个核心服务组件：
+
+#### 🔌 API Gateway 核心功能
+
+**1. RESTful API 服务**
+- 提供 HTTP 接口供 Web 管理界面调用
+- 设备管理 API（增删改查设备信息）
+- 用户认证和授权 API
+- 会话历史查询 API
+
+**2. WebSocket 服务**
+- 建立和维护与 Web 前端的 WebSocket 连接
+- 实时推送设备状态更新给前端
+- 推送会话进度通知（识别中、思考中、合成中等）
+
+**3. 认证授权**
+- JWT Token 验证
+- RBAC 权限控制
+- 用户身份验证和设备归属权限检查
+
+**4. MQTT 消息处理**
+- 订阅设备状态主题（`device/+/status`）
+- 发布设备控制命令（音量调节、重启等）
+- 处理设备 ACK 确认消息
+
+**5. 数据处理**
+- 缓存管理（Redis 缓存设备列表，TTL=60s）
+- 数据库查询（PostgreSQL）
+- 数据过滤和权限检查
+
+#### 🌉 Bridge 服务核心功能
+
+**1. 音频流处理**
+- 接收设备的 UDP 音频流（20ms/帧）
+- 音频流聚合和抖动缓冲
+- Opus 音频解码/编码
+
+**2. 协议转换**
+
+- UDP 音频数据转换为 WebSocket 流
+- 与 EchoKit Server 建立双向音频通信
+- 管理 EchoKit 会话生命周期
+
+**3. WebSocket 连接管理**
+- 维护与设备的 WebSocket 长连接
+- 通过 WebSocket 下发合成好的音频流
+- 连接池管理（支持 10,000+ 并发连接）
+
+**4. 会话管理**
+- 创建和管理语音交互会话
+- 会话状态跟踪
+- 会话数据持久化
+
+**5. 音频分发**
+- 接收 TTS 合成的音频流
+- 通过 WebSocket 推送音频帧给设备
+- 流量控制和缓冲区管理
+
+#### 🎯 核心交互流程
+
+1. **设备唤醒** → 接收 MQTT 唤醒事件，创建会话
+2. **音频上行** → UDP 接收 → WebSocket 转发 → EchoKit Server
+3. **AI 推理** → EchoKit 内部完成 ASR → LLM → TTS 处理链路
+4. **音频下行** → EchoKit 返回音频 → WebSocket 推送给设备
+5. **实时推送** → 设备状态变化 → MQTT → WebSocket → Web 前端
+
+应用服务层是整个系统的中枢，负责协议转换、数据流转和实时通信，确保 Web 管理界面和智能音箱设备之间的可靠交互。
 
 ## 详细交互时序图
 
@@ -1609,13 +1681,15 @@ graph TB
 | 关系数据库 | PostgreSQL 15+ | 事务支持 |
 | 缓存 | Redis 7+ | 高性能缓存 |
 
-### AI服务层 (Python)
+### AI服务层 (EchoKit)
 | 组件 | 技术选型 | 说明 |
 |------|---------|------|
-| ASR | FastAPI + 模型 | 流式语音识别 |
-| LLM | vLLM / TGI | 流式推理 |
-| TTS | FastAPI + 模型 | 语音合成 |
-| 对话管理 | Rust核心 + Python | 混合实现 |
+| EchoKit Server | Rust + WebSocket | 音频流处理核心 |
+| VAD | WebRTC VAD | 语音活动检测 |
+| ASR | Whisper | 流式语音识别 |
+| LLM | OpenAI/本地模型 | 大语言模型推理 |
+| TTS | Azure/本地模型 | 语音合成 |
+| 音频编解码 | Opus | 高效音频压缩 |
 
 ### 基础设施
 | 组件 | 技术选型 | 说明 |
@@ -1774,7 +1848,9 @@ graph LR
 
 ---
 
-**文档版本**: v1.0
+**文档版本**: v2.0 (EchoKit 集成版)
 **创建日期**: 2025-10-17
-**技术栈**: Rust + TypeScript + Python
+**更新日期**: 2025-10-27
+**技术栈**: Rust + TypeScript + EchoKit
 **适用场景**: 智能音箱端到端系统设计
+**主要更新**: 集成 EchoKit Server 作为 AI 推理服务层
