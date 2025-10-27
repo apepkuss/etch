@@ -14,7 +14,8 @@ import {
   Descriptions,
   Statistic,
   Row,
-  Col
+  Col,
+  message
 } from 'antd';
 import {
   SearchOutlined,
@@ -24,7 +25,9 @@ import {
   DesktopOutlined,
   ControlOutlined,
   ClockCircleOutlined,
-  PlayCircleOutlined
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+  StopOutlined
 } from '@ant-design/icons';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useDeviceStore } from '../stores/useDeviceStore';
@@ -38,8 +41,12 @@ export const Sessions: React.FC = () => {
   const {
     sessions,
     loading,
+    error,
     fetchSessions,
-    stats
+    fetchSessionStats,
+    stats,
+    completeSession,
+    interruptSession
   } = useSessionStore();
 
   const {
@@ -55,18 +62,29 @@ export const Sessions: React.FC = () => {
 
   useEffect(() => {
     fetchSessions();
-  }, [fetchSessions]);
+    fetchSessionStats();
+  }, [fetchSessions, fetchSessionStats]);
+
+  // 显示错误消息
+  useEffect(() => {
+    if (error) {
+      message.error(error);
+    }
+  }, [error]);
 
   // 过滤会话
   const filteredSessions = sessions.filter(session => {
-    const matchesSearch = session.transcription.toLowerCase().includes(searchText.toLowerCase()) ||
-                         session.response.toLowerCase().includes(searchText.toLowerCase());
-    const matchesDevice = filterDevice === 'all' || session.deviceId === filterDevice;
+    const transcription = session.transcription || '';
+    const response = session.response || '';
+
+    const matchesSearch = transcription.toLowerCase().includes(searchText.toLowerCase()) ||
+                         response.toLowerCase().includes(searchText.toLowerCase());
+    const matchesDevice = filterDevice === 'all' || session.device_id === filterDevice;
     const matchesStatus = filterStatus === 'all' || session.status === filterStatus;
 
     let matchesDate = true;
     if (dateRange && dateRange[0] && dateRange[1]) {
-      const sessionDate = dayjs(session.startTime);
+      const sessionDate = dayjs(session.start_time);
       matchesDate = sessionDate.isAfter(dateRange[0]) && sessionDate.isBefore(dateRange[1]);
     }
 
@@ -84,10 +102,10 @@ export const Sessions: React.FC = () => {
     const device = devices.find(d => d.id === deviceId);
     if (!device) return <AudioOutlined />;
 
-    switch (device.type) {
-      case DeviceType.SPEAKER: return <AudioOutlined />;
-      case DeviceType.DISPLAY: return <DesktopOutlined />;
-      case DeviceType.HUB: return <ControlOutlined />;
+    switch (device.device_type) {
+      case DeviceType.Speaker: return <AudioOutlined />;
+      case DeviceType.Display: return <DesktopOutlined />;
+      case DeviceType.Hub: return <ControlOutlined />;
       default: return <AudioOutlined />;
     }
   };
@@ -95,9 +113,9 @@ export const Sessions: React.FC = () => {
   // 获取状态颜色
   const getStatusColor = (status: SessionStatus) => {
     switch (status) {
-      case SessionStatus.ACTIVE: return 'processing';
-      case SessionStatus.COMPLETED: return 'success';
-      case SessionStatus.INTERRUPTED: return 'warning';
+      case SessionStatus.Active: return 'processing';
+      case SessionStatus.Completed: return 'success';
+      case SessionStatus.Interrupted: return 'error';
       default: return 'default';
     }
   };
@@ -105,10 +123,55 @@ export const Sessions: React.FC = () => {
   // 获取状态文本
   const getStatusText = (status: SessionStatus) => {
     switch (status) {
-      case SessionStatus.ACTIVE: return '进行中';
-      case SessionStatus.COMPLETED: return '已完成';
-      case SessionStatus.INTERRUPTED: return '已中断';
+      case SessionStatus.Active: return '进行中';
+      case SessionStatus.Completed: return '已完成';
+      case SessionStatus.Interrupted: return '已中断';
       default: return '未知';
+    }
+  };
+
+  // 获取状态图标
+  const getStatusIcon = (status: SessionStatus) => {
+    switch (status) {
+      case SessionStatus.Active: return <PlayCircleOutlined />;
+      case SessionStatus.Completed: return <StopOutlined />;
+      case SessionStatus.Interrupted: return <PauseCircleOutlined />;
+      default: return <ClockCircleOutlined />;
+    }
+  };
+
+  // 格式化时长
+  const formatDuration = (duration?: number) => {
+    if (!duration) return '-';
+    const minutes = Math.floor(duration / 60);
+    const seconds = duration % 60;
+    return `${minutes}分${seconds}秒`;
+  };
+
+  // 刷新会话列表
+  const handleRefresh = () => {
+    fetchSessions();
+    fetchSessionStats();
+    message.success('会话列表已刷新');
+  };
+
+  // 完成会话
+  const handleCompleteSession = async (sessionId: string) => {
+    try {
+      await completeSession(sessionId, '用户手动完成', '会话已成功完成');
+      message.success('会话已完成');
+    } catch (error) {
+      message.error('完成会话失败');
+    }
+  };
+
+  // 中断会话
+  const handleInterruptSession = async (sessionId: string) => {
+    try {
+      await interruptSession(sessionId);
+      message.success('会话已中断');
+    } catch (error) {
+      message.error('中断会话失败');
     }
   };
 
@@ -121,63 +184,41 @@ export const Sessions: React.FC = () => {
   // 表格列定义
   const columns: ColumnsType<Session> = [
     {
-      title: '时间',
-      dataIndex: 'startTime',
-      key: 'startTime',
-      render: (startTime: string) => (
-        <div>
-          <div>{dayjs(startTime).format('YYYY-MM-DD')}</div>
-          <div style={{ fontSize: 12, color: '#8c8c8c' }}>
-            {dayjs(startTime).format('HH:mm:ss')}
-          </div>
-        </div>
-      ),
-      sorter: (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
-      defaultSortOrder: 'descend'
-    },
-    {
-      title: '设备',
-      dataIndex: 'deviceId',
-      key: 'deviceId',
-      render: (deviceId: string) => (
-        <Space>
-          <Avatar
-            icon={getDeviceTypeIcon(deviceId)}
-            size="small"
-          />
-          {getDeviceName(deviceId)}
-        </Space>
-      ),
-      filters: devices.map(device => ({
-        text: device.name,
-        value: device.id
-      })),
-      onFilter: (value, record) => record.deviceId === value
-    },
-    {
-      title: '用户输入',
-      dataIndex: 'transcription',
-      key: 'transcription',
-      ellipsis: {
-        showTitle: false
-      },
-      render: (transcription: string) => (
-        <Tooltip placement="topLeft" title={transcription}>
-          {transcription}
-        </Tooltip>
+      title: '会话ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 120,
+      render: (id: string) => (
+        <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+          {id.slice(0, 8)}...
+        </span>
       )
     },
     {
-      title: '助手回复',
-      dataIndex: 'response',
-      key: 'response',
-      ellipsis: {
-        showTitle: false
-      },
-      render: (response: string) => (
-        <Tooltip placement="topLeft" title={response}>
-          {response}
-        </Tooltip>
+      title: '设备',
+      key: 'device',
+      render: (_, record) => (
+        <Space>
+          <Avatar
+            icon={getDeviceTypeIcon(record.device_id)}
+            size="small"
+          />
+          <div>
+            <div style={{ fontWeight: 'bold' }}>{getDeviceName(record.device_id)}</div>
+            <div style={{ color: '#666', fontSize: '12px' }}>{record.device_id}</div>
+          </div>
+        </Space>
+      )
+    },
+    {
+      title: '用户',
+      dataIndex: 'user_id',
+      key: 'user_id',
+      render: (userId: string) => (
+        <Space>
+          <Avatar icon={<UserOutlined />} size="small" />
+          <span>{userId}</span>
+        </Space>
       )
     },
     {
@@ -185,93 +226,152 @@ export const Sessions: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       render: (status: SessionStatus) => (
-        <Tag color={getStatusColor(status)}>
+        <Tag color={getStatusColor(status)} icon={getStatusIcon(status)}>
           {getStatusText(status)}
         </Tag>
-      ),
-      filters: [
-        { text: '进行中', value: SessionStatus.ACTIVE },
-        { text: '已完成', value: SessionStatus.COMPLETED },
-        { text: '已中断', value: SessionStatus.INTERRUPTED }
-      ],
-      onFilter: (value, record) => record.status === value
+      )
+    },
+    {
+      title: '开始时间',
+      dataIndex: 'start_time',
+      key: 'start_time',
+      render: (time: string) => (
+        <Tooltip title={new Date(time).toLocaleString()}>
+          {dayjs(time).format('MM-DD HH:mm')}
+        </Tooltip>
+      )
+    },
+    {
+      title: '结束时间',
+      dataIndex: 'end_time',
+      key: 'end_time',
+      render: (time: string | null) => (
+        time ? (
+          <Tooltip title={new Date(time).toLocaleString()}>
+            {dayjs(time).format('MM-DD HH:mm')}
+          </Tooltip>
+        ) : '-'
+      )
     },
     {
       title: '时长',
       dataIndex: 'duration',
       key: 'duration',
-      render: (duration?: number) => (
-        duration ? (
-          <Space>
-            <ClockCircleOutlined />
-            {duration}秒
-          </Space>
-        ) : '-'
-      ),
-      sorter: (a, b) => (a.duration || 0) - (b.duration || 0)
+      render: (duration: number | null) => formatDuration(duration || 0)
+    },
+    {
+      title: '语音内容',
+      dataIndex: 'transcription',
+      key: 'transcription',
+      width: 200,
+      ellipsis: true,
+      render: (text: string) => text || '-'
     },
     {
       title: '操作',
       key: 'actions',
       render: (_, record) => (
-        <Button
-          type="link"
-          icon={<PlayCircleOutlined />}
-          onClick={() => handleViewSession(record)}
-        >
-          查看详情
-        </Button>
+        <Space>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => handleViewSession(record)}
+          >
+            详情
+          </Button>
+          {record.status === SessionStatus.Active && (
+            <>
+              <Button
+                type="link"
+                size="small"
+                onClick={() => handleCompleteSession(record.id)}
+              >
+                完成
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                danger
+                onClick={() => handleInterruptSession(record.id)}
+              >
+                中断
+              </Button>
+            </>
+          )}
+        </Space>
       )
     }
   ];
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: '24px' }}>
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
+      <Row gutter={16} style={{ marginBottom: '24px' }}>
+        <Col span={6}>
           <Card>
             <Statistic
-              title="今日会话"
-              value={stats.totalToday}
-              prefix={<PlayCircleOutlined />}
+              title="总会话数"
+              value={stats.total}
+              prefix={<ClockCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col span={6}>
           <Card>
             <Statistic
               title="活跃会话"
-              value={stats.activeNow}
+              value={stats.active}
               valueStyle={{ color: '#1890ff' }}
               prefix={<PlayCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col span={6}>
           <Card>
             <Statistic
-              title="平均时长"
-              value={stats.averageDuration}
-              suffix="秒"
-              prefix={<ClockCircleOutlined />}
+              title="已完成"
+              value={stats.completed}
+              valueStyle={{ color: '#52c41a' }}
+              prefix={<StopOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic
+              title="已中断"
+              value={stats.interrupted}
+              valueStyle={{ color: '#ff4d4f' }}
+              prefix={<PauseCircleOutlined />}
             />
           </Card>
         </Col>
       </Row>
 
-      {/* 搜索和过滤 */}
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
+      {/* 会话列表 */}
+      <Card
+        title="会话管理"
+        extra={
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={handleRefresh}
+            loading={loading}
+          >
+            刷新
+          </Button>
+        }
+      >
+        {/* 搜索和过滤 */}
+        <Space style={{ marginBottom: '16px' }}>
           <Input
-            placeholder="搜索会话内容"
+            placeholder="搜索语音内容或回复"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{ width: 200 }}
           />
           <Select
-            placeholder="设备筛选"
+            placeholder="设备过滤"
             value={filterDevice}
             onChange={setFilterDevice}
             style={{ width: 150 }}
@@ -284,44 +384,41 @@ export const Sessions: React.FC = () => {
             ))}
           </Select>
           <Select
-            placeholder="状态筛选"
+            placeholder="状态过滤"
             value={filterStatus}
             onChange={setFilterStatus}
             style={{ width: 120 }}
           >
             <Select.Option value="all">全部状态</Select.Option>
-            <Select.Option value={SessionStatus.ACTIVE}>进行中</Select.Option>
-            <Select.Option value={SessionStatus.COMPLETED}>已完成</Select.Option>
-            <Select.Option value={SessionStatus.INTERRUPTED}>已中断</Select.Option>
+            <Select.Option value={SessionStatus.Active}>进行中</Select.Option>
+            <Select.Option value={SessionStatus.Completed}>已完成</Select.Option>
+            <Select.Option value={SessionStatus.Interrupted}>已中断</Select.Option>
           </Select>
           <RangePicker
             value={dateRange}
             onChange={setDateRange}
+            format="YYYY-MM-DD"
             placeholder={['开始日期', '结束日期']}
           />
-          <Button icon={<ReloadOutlined />} onClick={() => fetchSessions()} loading={loading}>
-            刷新
-          </Button>
         </Space>
-      </Card>
 
-      {/* 会话列表 */}
-      <Card>
+        {/* 会话表格 */}
         <Table
           columns={columns}
           dataSource={filteredSessions}
           rowKey="id"
           loading={loading}
           pagination={{
+            total: filteredSessions.length,
+            pageSize: 10,
             showSizeChanger: true,
             showQuickJumper: true,
-            showTotal: (total, range) =>
-              `第 ${range[0]}-${range[1]} 条，共 ${total} 条记录`
+            showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`
           }}
         />
       </Card>
 
-      {/* 会话详情对话框 */}
+      {/* 会话详情模态框 */}
       <Modal
         title="会话详情"
         open={isModalVisible}
@@ -333,79 +430,47 @@ export const Sessions: React.FC = () => {
         width={600}
       >
         {selectedSession && (
-          <div>
-            <Descriptions column={1} bordered>
-              <Descriptions.Item label="会话ID">
-                {selectedSession.id}
-              </Descriptions.Item>
-              <Descriptions.Item label="设备">
-                <Space>
-                  <Avatar
-                    icon={getDeviceTypeIcon(selectedSession.deviceId)}
-                    size="small"
-                  />
-                  {getDeviceName(selectedSession.deviceId)}
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="开始时间">
-                {dayjs(selectedSession.startTime).format('YYYY-MM-DD HH:mm:ss')}
-              </Descriptions.Item>
-              {selectedSession.endTime && (
-                <Descriptions.Item label="结束时间">
-                  {dayjs(selectedSession.endTime).format('YYYY-MM-DD HH:mm:ss')}
-                </Descriptions.Item>
-              )}
-              {selectedSession.duration && (
-                <Descriptions.Item label="会话时长">
-                  {selectedSession.duration} 秒
-                </Descriptions.Item>
-              )}
-              <Descriptions.Item label="状态">
-                <Tag color={getStatusColor(selectedSession.status)}>
-                  {getStatusText(selectedSession.status)}
-                </Tag>
-              </Descriptions.Item>
-            </Descriptions>
-
-            <div style={{ marginTop: 24 }}>
-              <h4>对话内容</h4>
-              <Timeline>
-                <Timeline.Item color="blue">
-                  <div>
-                    <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                      <UserOutlined /> 用户输入
-                    </div>
-                    <div style={{
-                      padding: 12,
-                      background: '#f0f2f5',
-                      borderRadius: 6,
-                      marginTop: 4
-                    }}>
-                      {selectedSession.transcription}
-                    </div>
-                  </div>
-                </Timeline.Item>
-                <Timeline.Item color="green">
-                  <div>
-                    <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                      <AudioOutlined /> 智能助手
-                    </div>
-                    <div style={{
-                      padding: 12,
-                      background: '#f6ffed',
-                      borderRadius: 6,
-                      border: '1px solid #b7eb8f',
-                      marginTop: 4
-                    }}>
-                      {selectedSession.response}
-                    </div>
-                  </div>
-                </Timeline.Item>
-              </Timeline>
-            </div>
-          </div>
+          <Descriptions column={1} bordered>
+            <Descriptions.Item label="会话ID">
+              <code>{selectedSession.id}</code>
+            </Descriptions.Item>
+            <Descriptions.Item label="设备">
+              <Space>
+                {getDeviceTypeIcon(selectedSession.device_id)}
+                {getDeviceName(selectedSession.device_id)}
+              </Space>
+            </Descriptions.Item>
+            <Descriptions.Item label="用户">
+              <Space>
+                <Avatar icon={<UserOutlined />} size="small" />
+                {selectedSession.user_id}
+              </Space>
+            </Descriptions.Item>
+            <Descriptions.Item label="状态">
+              <Tag color={getStatusColor(selectedSession.status)} icon={getStatusIcon(selectedSession.status)}>
+                {getStatusText(selectedSession.status)}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="开始时间">
+              {new Date(selectedSession.start_time).toLocaleString()}
+            </Descriptions.Item>
+            <Descriptions.Item label="结束时间">
+              {selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString() : '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="时长">
+              {formatDuration(selectedSession.duration || 0)}
+            </Descriptions.Item>
+            <Descriptions.Item label="语音内容">
+              {selectedSession.transcription || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="回复内容">
+              {selectedSession.response || '-'}
+            </Descriptions.Item>
+          </Descriptions>
         )}
       </Modal>
     </div>
   );
 };
+
+export default Sessions;

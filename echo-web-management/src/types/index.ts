@@ -2,30 +2,30 @@
 export interface Device {
   id: string;
   name: string;
-  type: DeviceType;
+  device_type: DeviceType;
   status: DeviceStatus;
   location: string;
-  firmwareVersion: string;
-  batteryLevel?: number;
+  firmware_version: string;
+  battery_level: number;
   volume: number;
-  lastSeen: string;
-  isOnline: boolean;
+  last_seen: string;
+  is_online: boolean;
   owner: string;
 }
 
 export const DeviceType = {
-  SPEAKER: 'speaker',
-  DISPLAY: 'display',
-  HUB: 'hub'
+  Speaker: 'Speaker',
+  Display: 'Display',
+  Hub: 'Hub'
 } as const;
 
 export type DeviceType = typeof DeviceType[keyof typeof DeviceType];
 
 export const DeviceStatus = {
-  ONLINE: 'online',
-  OFFLINE: 'offline',
-  MAINTENANCE: 'maintenance',
-  ERROR: 'error'
+  Online: 'Online',
+  Offline: 'Offline',
+  Maintenance: 'Maintenance',
+  Error: 'Error'
 } as const;
 
 export type DeviceStatus = typeof DeviceStatus[keyof typeof DeviceStatus];
@@ -51,20 +51,20 @@ export type UserRole = typeof UserRole[keyof typeof UserRole];
 // 会话相关类型定义
 export interface Session {
   id: string;
-  deviceId: string;
-  userId: string;
-  startTime: string;
-  endTime?: string;
+  device_id: string;
+  user_id: string;
+  start_time: string;
+  end_time?: string;
   duration?: number;
-  transcription: string;
-  response: string;
+  transcription?: string;
+  response?: string;
   status: SessionStatus;
 }
 
 export const SessionStatus = {
-  ACTIVE: 'active',
-  COMPLETED: 'completed',
-  INTERRUPTED: 'interrupted'
+  Active: 'Active',
+  Completed: 'Completed',
+  Interrupted: 'Interrupted'
 } as const;
 
 export type SessionStatus = typeof SessionStatus[keyof typeof SessionStatus];
@@ -124,6 +124,44 @@ export const MessageType = {
 } as const;
 
 export type MessageType = typeof MessageType[keyof typeof MessageType];
+
+// WebSocket 消息类型定义
+export interface WebSocketMessage {
+  SystemNotification?: {
+    level: NotificationLevel;
+    title: string;
+    message: string;
+  };
+  DeviceStatusUpdate?: {
+    device_id: string;
+    status: DeviceStatus;
+    timestamp: string;
+  };
+  SessionProgress?: {
+    session_id: string;
+    device_id: string;
+    stage: SessionStage;
+    progress: number;
+    message: string;
+  };
+}
+
+export const NotificationLevel = {
+  Info: 'Info',
+  Warning: 'Warning',
+  Error: 'Error'
+} as const;
+
+export type NotificationLevel = typeof NotificationLevel[keyof typeof NotificationLevel];
+
+export const SessionStage = {
+  Recording: 'Recording',
+  Processing: 'Processing',
+  Responding: 'Responding',
+  Completed: 'Completed'
+} as const;
+
+export type SessionStage = typeof SessionStage[keyof typeof SessionStage];
 
 // 统计数据类型定义
 export interface DashboardStats {

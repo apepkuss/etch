@@ -55,12 +55,19 @@ export const DeviceList: React.FC = () => {
     fetchDevices();
   }, [fetchDevices]);
 
+  // 显示错误消息
+  useEffect(() => {
+    if (error) {
+      message.error(error);
+    }
+  }, [error]);
+
   // 过滤设备
   const filteredDevices = devices.filter(device => {
     const matchesSearch = device.name.toLowerCase().includes(searchText.toLowerCase()) ||
                          device.location.toLowerCase().includes(searchText.toLowerCase());
     const matchesStatus = filterStatus === 'all' || device.status === filterStatus;
-    const matchesType = filterType === 'all' || device.type === filterType;
+    const matchesType = filterType === 'all' || device.device_type === filterType;
 
     return matchesSearch && matchesStatus && matchesType;
   });
@@ -68,10 +75,10 @@ export const DeviceList: React.FC = () => {
   // 获取状态颜色
   const getStatusColor = (status: DeviceStatus) => {
     switch (status) {
-      case DeviceStatus.ONLINE: return 'success';
-      case DeviceStatus.OFFLINE: return 'default';
-      case DeviceStatus.ERROR: return 'error';
-      case DeviceStatus.MAINTENANCE: return 'warning';
+      case DeviceStatus.Online: return 'success';
+      case DeviceStatus.Offline: return 'default';
+      case DeviceStatus.Error: return 'error';
+      case DeviceStatus.Maintenance: return 'warning';
       default: return 'default';
     }
   };
@@ -79,10 +86,10 @@ export const DeviceList: React.FC = () => {
   // 获取状态文本
   const getStatusText = (status: DeviceStatus) => {
     switch (status) {
-      case DeviceStatus.ONLINE: return '在线';
-      case DeviceStatus.OFFLINE: return '离线';
-      case DeviceStatus.ERROR: return '故障';
-      case DeviceStatus.MAINTENANCE: return '维护中';
+      case DeviceStatus.Online: return '在线';
+      case DeviceStatus.Offline: return '离线';
+      case DeviceStatus.Error: return '故障';
+      case DeviceStatus.Maintenance: return '维护中';
       default: return '未知';
     }
   };
@@ -90,35 +97,49 @@ export const DeviceList: React.FC = () => {
   // 获取设备类型图标
   const getDeviceTypeIcon = (type: DeviceType) => {
     switch (type) {
-      case DeviceType.SPEAKER: return <AudioOutlined />;
-      case DeviceType.DISPLAY: return <DesktopOutlined />;
-      case DeviceType.HUB: return <ControlOutlined />;
+      case DeviceType.Speaker: return <AudioOutlined />;
+      case DeviceType.Display: return <DesktopOutlined />;
+      case DeviceType.Hub: return <ControlOutlined />;
       default: return <AudioOutlined />;
     }
   };
 
-  // 处理添加设备
+  // 获取电池颜色
+  const getBatteryColor = (level: number) => {
+    if (level > 60) return '#52c41a';
+    if (level > 30) return '#faad14';
+    return '#ff4d4f';
+  };
+
+  // 刷新设备列表
+  const handleRefresh = () => {
+    fetchDevices();
+    message.success('设备列表已刷新');
+  };
+
+  // 添加设备
   const handleAddDevice = async (values: DeviceFormData) => {
     try {
       await addDevice({
         ...values,
-        status: DeviceStatus.OFFLINE,
-        firmwareVersion: '1.0.0',
+        device_type: values.type,
+        status: DeviceStatus.Offline,
+        firmware_version: '1.0.0',
+        battery_level: 0,
         volume: 50,
-        lastSeen: new Date().toISOString(),
-        isOnline: false
+        last_seen: new Date().toISOString(),
+        is_online: false
       });
 
-      message.success('设备添加成功');
       setIsModalVisible(false);
       form.resetFields();
-      fetchDevices();
+      message.success('设备添加成功');
     } catch (error) {
       message.error('添加设备失败');
     }
   };
 
-  // 处理删除设备
+  // 删除设备
   const handleDeleteDevice = async (deviceId: string) => {
     try {
       await deleteDevice(deviceId);
@@ -128,11 +149,11 @@ export const DeviceList: React.FC = () => {
     }
   };
 
-  // 处理重启设备
+  // 重启设备
   const handleRestartDevice = async (deviceId: string) => {
     try {
       await restartDevice(deviceId);
-      message.success('设备重启指令已发送');
+      message.success('设备重启命令已发送');
     } catch (error) {
       message.error('重启设备失败');
     }
@@ -141,87 +162,91 @@ export const DeviceList: React.FC = () => {
   // 表格列定义
   const columns: ColumnsType<Device> = [
     {
-      title: '设备信息',
+      title: '设备',
       key: 'device',
       render: (_, record) => (
         <Space>
           <Avatar
-            icon={getDeviceTypeIcon(record.type)}
-            style={{
-              backgroundColor: record.isOnline ? '#1890ff' : '#d9d9d9'
-            }}
+            icon={getDeviceTypeIcon(record.device_type)}
+            style={{ backgroundColor: record.is_online ? '#52c41a' : '#d9d9d9' }}
           />
           <div>
-            <div style={{ fontWeight: 500 }}>{record.name}</div>
-            <div style={{ fontSize: 12, color: '#8c8c8c' }}>
-              {record.location} • {record.id}
-            </div>
+            <div style={{ fontWeight: 'bold' }}>{record.name}</div>
+            <div style={{ color: '#666', fontSize: '12px' }}>{record.id}</div>
           </div>
         </Space>
       )
     },
     {
       title: '类型',
-      dataIndex: 'type',
-      key: 'type',
-      render: (type: DeviceType) => {
-        const typeMap = {
-          [DeviceType.SPEAKER]: '智能音箱',
-          [DeviceType.DISPLAY]: '智能显示屏',
-          [DeviceType.HUB]: '中控设备'
-        };
-        return typeMap[type] || '未知设备';
-      }
+      dataIndex: 'device_type',
+      key: 'device_type',
+      render: (type: DeviceType) => (
+        <Space>
+          {getDeviceTypeIcon(type)}
+          <span>{type}</span>
+        </Space>
+      )
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: DeviceStatus) => (
-        <Tag color={getStatusColor(status)}>
-          {getStatusText(status)}
-        </Tag>
+      render: (status: DeviceStatus, record) => (
+        <Space direction="vertical" size="small">
+          <Tag color={getStatusColor(status)}>
+            {getStatusText(status)}
+          </Tag>
+          {record.is_online && (
+            <Tag color="green" icon={<WifiOutlined />}>
+              连接中
+            </Tag>
+          )}
+        </Space>
       )
     },
     {
-      title: '电量',
-      dataIndex: 'batteryLevel',
-      key: 'batteryLevel',
-      render: (batteryLevel?: number) => (
-        batteryLevel !== undefined ? (
-          <Tooltip title={`${batteryLevel}%`}>
-            <Progress
-              percent={batteryLevel}
-              size="small"
-              format={() => (
-                <span style={{ fontSize: 12 }}>
-                  <BatteryOutlined /> {batteryLevel}%
-                </span>
-              )}
-              strokeColor={batteryLevel > 20 ? '#52c41a' : '#ff4d4f'}
-            />
-          </Tooltip>
-        ) : '-'
+      title: '位置',
+      dataIndex: 'location',
+      key: 'location'
+    },
+    {
+      title: '电池',
+      dataIndex: 'battery_level',
+      key: 'battery_level',
+      render: (level: number) => (
+        <Progress
+          percent={level}
+          size="small"
+          strokeColor={getBatteryColor(level)}
+          format={() => `${level}%`}
+        />
       )
     },
     {
       title: '音量',
       dataIndex: 'volume',
       key: 'volume',
-      render: (volume: number) => `${volume}%`
+      render: (volume: number) => (
+        <Progress
+          percent={volume}
+          size="small"
+          format={() => `${volume}%`}
+        />
+      )
     },
     {
       title: '固件版本',
-      dataIndex: 'firmwareVersion',
-      key: 'firmwareVersion'
+      dataIndex: 'firmware_version',
+      key: 'firmware_version'
     },
     {
       title: '最后在线',
-      dataIndex: 'lastSeen',
-      key: 'lastSeen',
-      render: (lastSeen: string) => (
-        <Tooltip title={new Date(lastSeen).toLocaleString()}>
-          {new Date(lastSeen).toLocaleTimeString()}
+      dataIndex: 'last_seen',
+      key: 'last_seen',
+      render: (time: string) => (
+        <Tooltip title={new Date(time).toLocaleString()}>
+          {new Date(time).toLocaleDateString()}
         </Tooltip>
       )
     },
@@ -230,7 +255,7 @@ export const DeviceList: React.FC = () => {
       key: 'actions',
       render: (_, record) => (
         <Space>
-          <Tooltip title="查看详情">
+          <Tooltip title="设备详情">
             <Button
               type="text"
               icon={<SettingOutlined />}
@@ -241,25 +266,20 @@ export const DeviceList: React.FC = () => {
             <Popconfirm
               title="确定要重启此设备吗？"
               onConfirm={() => handleRestartDevice(record.id)}
-              disabled={record.status === DeviceStatus.MAINTENANCE}
+              okText="确定"
+              cancelText="取消"
             >
-              <Button
-                type="text"
-                icon={<ReloadOutlined />}
-                disabled={record.status === DeviceStatus.MAINTENANCE}
-              />
+              <Button type="text" icon={<ReloadOutlined />} />
             </Popconfirm>
           </Tooltip>
           <Tooltip title="删除设备">
             <Popconfirm
-              title="确定要删除此设备吗？此操作不可恢复。"
+              title="确定要删除此设备吗？"
               onConfirm={() => handleDeleteDevice(record.id)}
+              okText="确定"
+              cancelText="取消"
             >
-              <Button
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-              />
+              <Button type="text" danger icon={<DeleteOutlined />} />
             </Popconfirm>
           </Tooltip>
         </Space>
@@ -268,29 +288,30 @@ export const DeviceList: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* 页面头部 */}
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ margin: 0, marginBottom: 8 }}>设备管理</h2>
-            <p style={{ margin: 0, color: '#8c8c8c' }}>
-              共 {devices.length} 个设备，{filteredDevices.length} 个显示
-            </p>
-          </div>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setIsModalVisible(true)}
-          >
-            添加设备
-          </Button>
-        </div>
-      </Card>
-
-      {/* 搜索和过滤 */}
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
+    <div style={{ padding: '24px' }}>
+      <Card
+        title="设备管理"
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setIsModalVisible(true)}
+            >
+              添加设备
+            </Button>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={handleRefresh}
+              loading={loading}
+            >
+              刷新
+            </Button>
+          </Space>
+        }
+      >
+        {/* 搜索和过滤 */}
+        <Space style={{ marginBottom: '16px' }}>
           <Input
             placeholder="搜索设备名称或位置"
             prefix={<SearchOutlined />}
@@ -299,61 +320,55 @@ export const DeviceList: React.FC = () => {
             style={{ width: 200 }}
           />
           <Select
-            placeholder="状态筛选"
+            placeholder="状态过滤"
             value={filterStatus}
             onChange={setFilterStatus}
             style={{ width: 120 }}
           >
             <Select.Option value="all">全部状态</Select.Option>
-            <Select.Option value={DeviceStatus.ONLINE}>在线</Select.Option>
-            <Select.Option value={DeviceStatus.OFFLINE}>离线</Select.Option>
-            <Select.Option value={DeviceStatus.ERROR}>故障</Select.Option>
-            <Select.Option value={DeviceStatus.MAINTENANCE}>维护中</Select.Option>
+            <Select.Option value={DeviceStatus.Online}>在线</Select.Option>
+            <Select.Option value={DeviceStatus.Offline}>离线</Select.Option>
+            <Select.Option value={DeviceStatus.Error}>故障</Select.Option>
+            <Select.Option value={DeviceStatus.Maintenance}>维护中</Select.Option>
           </Select>
           <Select
-            placeholder="类型筛选"
+            placeholder="类型过滤"
             value={filterType}
             onChange={setFilterType}
             style={{ width: 120 }}
           >
             <Select.Option value="all">全部类型</Select.Option>
-            <Select.Option value={DeviceType.SPEAKER}>智能音箱</Select.Option>
-            <Select.Option value={DeviceType.DISPLAY}>智能显示屏</Select.Option>
-            <Select.Option value={DeviceType.HUB}>中控设备</Select.Option>
+            <Select.Option value={DeviceType.Speaker}>音箱</Select.Option>
+            <Select.Option value={DeviceType.Display}>显示屏</Select.Option>
+            <Select.Option value={DeviceType.Hub}>中控</Select.Option>
           </Select>
-          <Button icon={<ReloadOutlined />} onClick={fetchDevices} loading={loading}>
-            刷新
-          </Button>
         </Space>
-      </Card>
 
-      {/* 设备列表 */}
-      <Card>
+        {/* 设备表格 */}
         <Table
           columns={columns}
           dataSource={filteredDevices}
           rowKey="id"
           loading={loading}
           pagination={{
+            total: filteredDevices.length,
+            pageSize: 10,
             showSizeChanger: true,
             showQuickJumper: true,
-            showTotal: (total, range) =>
-              `第 ${range[0]}-${range[1]} 条，共 ${total} 条记录`
+            showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`
           }}
         />
       </Card>
 
-      {/* 添加设备对话框 */}
+      {/* 添加设备模态框 */}
       <Modal
         title="添加设备"
         open={isModalVisible}
+        onOk={() => form.submit()}
         onCancel={() => {
           setIsModalVisible(false);
           form.resetFields();
         }}
-        onOk={() => form.submit()}
-        okText="添加"
-        cancelText="取消"
       >
         <Form
           form={form}
@@ -374,9 +389,9 @@ export const DeviceList: React.FC = () => {
             rules={[{ required: true, message: '请选择设备类型' }]}
           >
             <Select placeholder="请选择设备类型">
-              <Select.Option value={DeviceType.SPEAKER}>智能音箱</Select.Option>
-              <Select.Option value={DeviceType.DISPLAY}>智能显示屏</Select.Option>
-              <Select.Option value={DeviceType.HUB}>中控设备</Select.Option>
+              <Select.Option value={DeviceType.Speaker}>音箱</Select.Option>
+              <Select.Option value={DeviceType.Display}>显示屏</Select.Option>
+              <Select.Option value={DeviceType.Hub}>中控</Select.Option>
             </Select>
           </Form.Item>
 
@@ -400,3 +415,5 @@ export const DeviceList: React.FC = () => {
     </div>
   );
 };
+
+export default DeviceList;

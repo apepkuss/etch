@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { Device, DeviceStatus, DeviceConfig, ApiResponse } from '../types';
+import { devicesApi } from '../api';
+import { websocketService } from '../api/websocket';
 
 interface DeviceStore {
   // 状态
@@ -24,81 +26,10 @@ interface DeviceStore {
   deleteDevice: (deviceId: string) => Promise<void>;
   addDevice: (device: Omit<Device, 'id'>) => Promise<void>;
   updateDeviceStatus: (deviceId: string, status: DeviceStatus) => void;
+  fetchDeviceStats: () => Promise<void>;
 }
 
-// Mock API函数
-const mockApi = {
-  async getDevices(): Promise<Device[]> {
-    // 模拟API延迟
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    return [
-      {
-        id: 'dev001',
-        name: '客厅音箱',
-        type: 'speaker' as const,
-        status: 'online' as const,
-        location: '客厅',
-        firmwareVersion: '1.2.3',
-        batteryLevel: 85,
-        volume: 50,
-        lastSeen: '2024-10-24T16:30:00Z',
-        isOnline: true,
-        owner: 'user001'
-      },
-      {
-        id: 'dev002',
-        name: '卧室显示屏',
-        type: 'display' as const,
-        status: 'offline' as const,
-        location: '主卧室',
-        firmwareVersion: '1.2.2',
-        batteryLevel: 60,
-        volume: 30,
-        lastSeen: '2024-10-24T15:45:00Z',
-        isOnline: false,
-        owner: 'user001'
-      },
-      {
-        id: 'dev003',
-        name: '厨房中控',
-        type: 'hub' as const,
-        status: 'online' as const,
-        location: '厨房',
-        firmwareVersion: '1.2.3',
-        batteryLevel: 95,
-        volume: 40,
-        lastSeen: '2024-10-24T16:32:00Z',
-        isOnline: true,
-        owner: 'user001'
-      }
-    ];
-  },
-
-  async updateDeviceConfig(deviceId: string, config: Partial<DeviceConfig>): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    console.log(`Updating device ${deviceId} with config:`, config);
-  },
-
-  async restartDevice(deviceId: string): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    console.log(`Restarting device: ${deviceId}`);
-  },
-
-  async deleteDevice(deviceId: string): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    console.log(`Deleting device: ${deviceId}`);
-  },
-
-  async addDevice(device: Omit<Device, 'id'>): Promise<Device> {
-    await new Promise(resolve => setTimeout(resolve, 800));
-    return {
-      ...device,
-      id: `dev${Date.now()}`
-    };
-  }
-};
-
+// 创建设备 store
 export const useDeviceStore = create<DeviceStore>((set, get) => ({
   // 初始状态
   devices: [],
@@ -109,7 +40,7 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
     total: 0,
     online: 0,
     offline: 0,
-    error: 0
+    error: 0,
   },
 
   // 获取设备列表
@@ -117,18 +48,10 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
     set({ loading: true, error: null });
 
     try {
-      const devices = await mockApi.getDevices();
-
-      // 计算统计数据
-      const stats = {
-        total: devices.length,
-        online: devices.filter(d => d.status === 'online').length,
-        offline: devices.filter(d => d.status === 'offline').length,
-        error: devices.filter(d => d.status === 'error').length
-      };
-
-      set({ devices, stats, loading: false });
+      const devices = await devicesApi.getDevices();
+      set({ devices, loading: false });
     } catch (error) {
+      console.error('Failed to fetch devices:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to fetch devices',
         loading: false
@@ -137,24 +60,28 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   },
 
   // 选择设备
-  selectDevice: (device) => {
+  selectDevice: (device: Device | null) => {
     set({ selectedDevice: device });
   },
 
   // 更新设备配置
-  updateDeviceConfig: async (deviceId, config) => {
+  updateDeviceConfig: async (deviceId: string, config: Partial<DeviceConfig>) => {
     try {
-      await mockApi.updateDeviceConfig(deviceId, config);
+      const updatedDevice = await devicesApi.updateDevice(deviceId, {
+        volume: config.volume,
+        location: config.location,
+      });
 
-      // 更新本地状态
-      set((state) => ({
+      set(state => ({
         devices: state.devices.map(device =>
-          device.id === deviceId
-            ? { ...device, ...config }
-            : device
-        )
+          device.id === deviceId ? { ...device, ...updatedDevice } : device
+        ),
+        selectedDevice: state.selectedDevice?.id === deviceId
+          ? { ...state.selectedDevice, ...updatedDevice }
+          : state.selectedDevice
       }));
     } catch (error) {
+      console.error('Failed to update device config:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to update device config'
       });
@@ -162,30 +89,12 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   },
 
   // 重启设备
-  restartDevice: async (deviceId) => {
+  restartDevice: async (deviceId: string) => {
     try {
-      await mockApi.restartDevice(deviceId);
-
-      // 更新设备状态
-      set((state) => ({
-        devices: state.devices.map(device =>
-          device.id === deviceId
-            ? { ...device, status: 'maintenance' as const }
-            : device
-        )
-      }));
-
-      // 模拟重启后恢复在线状态
-      setTimeout(() => {
-        set((state) => ({
-          devices: state.devices.map(device =>
-            device.id === deviceId
-              ? { ...device, status: 'online' as const, lastSeen: new Date().toISOString() }
-              : device
-          )
-        }));
-      }, 5000);
+      await devicesApi.restartDevice(deviceId);
+      // 可以添加成功提示
     } catch (error) {
+      console.error('Failed to restart device:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to restart device'
       });
@@ -193,15 +102,16 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   },
 
   // 删除设备
-  deleteDevice: async (deviceId) => {
+  deleteDevice: async (deviceId: string) => {
     try {
-      await mockApi.deleteDevice(deviceId);
+      await devicesApi.deleteDevice(deviceId);
 
-      set((state) => ({
+      set(state => ({
         devices: state.devices.filter(device => device.id !== deviceId),
         selectedDevice: state.selectedDevice?.id === deviceId ? null : state.selectedDevice
       }));
     } catch (error) {
+      console.error('Failed to delete device:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to delete device'
       });
@@ -209,43 +119,79 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   },
 
   // 添加设备
-  addDevice: async (device) => {
+  addDevice: async (device: Omit<Device, 'id'>) => {
     try {
-      const newDevice = await mockApi.addDevice(device);
+      // 注意：当前 API Gateway 没有实现添加设备的端点，这里只是示例
+      const newDevice: Device = {
+        ...device,
+        id: `dev_${Date.now()}`, // 临时 ID
+      };
 
-      set((state) => ({
+      set(state => ({
         devices: [...state.devices, newDevice]
       }));
     } catch (error) {
+      console.error('Failed to add device:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to add device'
       });
     }
   },
 
-  // 更新设备状态（用于实时更新）
-  updateDeviceStatus: (deviceId, status) => {
-    set((state) => {
-      const updatedDevices = state.devices.map(device =>
+  // 更新设备状态 (通常通过 WebSocket 消息触发)
+  updateDeviceStatus: (deviceId: string, status: DeviceStatus) => {
+    set(state => ({
+      devices: state.devices.map(device =>
         device.id === deviceId
           ? {
               ...device,
               status,
-              isOnline: status === 'online',
-              lastSeen: new Date().toISOString()
+              is_online: status === 'Online',
+              last_seen: new Date().toISOString()
             }
           : device
-      );
+      ),
+      selectedDevice: state.selectedDevice?.id === deviceId
+        ? {
+            ...state.selectedDevice,
+            status,
+            is_online: status === 'Online',
+            last_seen: new Date().toISOString()
+          }
+        : state.selectedDevice
+    }));
+  },
 
-      // 重新计算统计
-      const stats = {
-        total: updatedDevices.length,
-        online: updatedDevices.filter(d => d.status === 'online').length,
-        offline: updatedDevices.filter(d => d.status === 'offline').length,
-        error: updatedDevices.filter(d => d.status === 'error').length
-      };
-
-      return { devices: updatedDevices, stats };
-    });
-  }
+  // 获取设备统计
+  fetchDeviceStats: async () => {
+    try {
+      const stats = await devicesApi.getDeviceStats();
+      set({ stats });
+    } catch (error) {
+      console.error('Failed to fetch device stats:', error);
+      // 不设置错误状态，因为统计信息不是关键功能
+    }
+  },
 }));
+
+// WebSocket 消息处理器
+websocketService.connect({
+  onConnect: () => {
+    console.log('Device store connected to WebSocket');
+  },
+  onMessage: (message) => {
+    // 处理设备状态更新
+    if (message.DeviceStatusUpdate) {
+      const { device_id, status } = message.DeviceStatusUpdate;
+      get().updateDeviceStatus(device_id, status);
+    }
+  },
+  onDisconnect: () => {
+    console.log('Device store disconnected from WebSocket');
+  },
+  onError: (error) => {
+    console.error('Device store WebSocket error:', error);
+  },
+});
+
+export default useDeviceStore;

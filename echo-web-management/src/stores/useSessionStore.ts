@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { Session, SessionStatus } from '../types';
+import { sessionsApi } from '../api';
+import { websocketService } from '../api/websocket';
 
 interface SessionStore {
   // 状态
@@ -10,63 +12,23 @@ interface SessionStore {
 
   // 统计
   stats: {
-    totalToday: number;
-    activeNow: number;
-    averageDuration: number;
+    total: number;
+    active: number;
+    completed: number;
+    interrupted: number;
   };
 
   // 操作
-  fetchSessions: (deviceId?: string) => Promise<void>;
-  getActiveSessions: () => void;
-  addSession: (session: Session) => void;
+  fetchSessions: () => Promise<void>;
+  fetchSessionStats: () => Promise<void>;
+  createSession: (deviceId: string, userId: string) => Promise<Session | null>;
   updateSession: (sessionId: string, updates: Partial<Session>) => void;
+  completeSession: (sessionId: string, transcription: string, response: string) => Promise<void>;
+  interruptSession: (sessionId: string) => Promise<void>;
+  deleteSession: (sessionId: string) => Promise<void>;
 }
 
-// Mock API函数
-const mockSessionApi = {
-  async getSessions(deviceId?: string): Promise<Session[]> {
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    const mockSessions: Session[] = [
-      {
-        id: 'sess001',
-        deviceId: 'dev001',
-        userId: 'user001',
-        startTime: '2024-10-24T16:25:00Z',
-        endTime: '2024-10-24T16:28:00Z',
-        duration: 180,
-        transcription: '今天天气怎么样',
-        response: '今天天气晴朗，温度25度，适合外出活动',
-        status: 'completed'
-      },
-      {
-        id: 'sess002',
-        deviceId: 'dev001',
-        userId: 'user001',
-        startTime: '2024-10-24T16:30:00Z',
-        transcription: '播放音乐',
-        response: '正在为您播放音乐',
-        status: 'active'
-      },
-      {
-        id: 'sess003',
-        deviceId: 'dev003',
-        userId: 'user001',
-        startTime: '2024-10-24T16:15:00Z',
-        endTime: '2024-10-24T16:17:00Z',
-        duration: 120,
-        transcription: '打开客厅灯',
-        response: '已为您打开客厅的灯',
-        status: 'completed'
-      }
-    ];
-
-    return deviceId
-      ? mockSessions.filter(session => session.deviceId === deviceId)
-      : mockSessions;
-  }
-};
-
+// 创建会话 store
 export const useSessionStore = create<SessionStore>((set, get) => ({
   // 初始状态
   sessions: [],
@@ -74,49 +36,27 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   loading: false,
   error: null,
   stats: {
-    totalToday: 0,
-    activeNow: 0,
-    averageDuration: 0
+    total: 0,
+    active: 0,
+    completed: 0,
+    interrupted: 0,
   },
 
   // 获取会话列表
-  fetchSessions: async (deviceId) => {
+  fetchSessions: async () => {
     set({ loading: true, error: null });
 
     try {
-      const sessions = await mockSessionApi.getSessions(deviceId);
-
-      // 计算统计数据
-      const today = new Date().toDateString();
-      const todaySessions = sessions.filter(
-        session => new Date(session.startTime).toDateString() === today
-      );
-
-      const activeSessions = sessions.filter(
-        session => session.status === 'active'
-      );
-
-      const completedSessions = sessions.filter(
-        session => session.status === 'completed' && session.duration
-      );
-
-      const averageDuration = completedSessions.length > 0
-        ? completedSessions.reduce((sum, session) => sum + (session.duration || 0), 0) / completedSessions.length
-        : 0;
-
-      const stats = {
-        totalToday: todaySessions.length,
-        activeNow: activeSessions.length,
-        averageDuration: Math.round(averageDuration)
-      };
+      const sessions = await sessionsApi.getSessions();
+      const activeSessions = sessions.filter(session => session.status === 'Active');
 
       set({
         sessions,
         activeSessions,
-        stats,
         loading: false
       });
     } catch (error) {
+      console.error('Failed to fetch sessions:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to fetch sessions',
         loading: false
@@ -124,59 +64,132 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  // 获取活跃会话
-  getActiveSessions: () => {
-    const { sessions } = get();
-    const activeSessions = sessions.filter(session => session.status === 'active');
-    set({ activeSessions });
+  // 获取会话统计
+  fetchSessionStats: async () => {
+    try {
+      const stats = await sessionsApi.getSessionStats();
+      set({ stats });
+    } catch (error) {
+      console.error('Failed to fetch session stats:', error);
+      // 不设置错误状态，因为统计信息不是关键功能
+    }
   },
 
-  // 添加新会话
-  addSession: (session) => {
-    set((state) => ({
-      sessions: [session, ...state.sessions]
-    }));
+  // 创建新会话
+  createSession: async (deviceId: string, userId: string) => {
+    try {
+      const newSession = await sessionsApi.createSession(deviceId, userId);
 
-    // 如果是活跃会话，更新活跃会话列表
-    if (session.status === 'active') {
-      set((state) => ({
-        activeSessions: [session, ...state.activeSessions],
-        stats: {
-          ...state.stats,
-          activeNow: state.stats.activeNow + 1
-        }
+      set(state => ({
+        sessions: [...state.sessions, newSession],
+        activeSessions: newSession.status === 'Active'
+          ? [...state.activeSessions, newSession]
+          : state.activeSessions
       }));
+
+      return newSession;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      set({
+        error: error instanceof Error ? error.message : 'Failed to create session'
+      });
+      return null;
     }
   },
 
   // 更新会话
-  updateSession: (sessionId, updates) => {
-    set((state) => {
-      const updatedSessions = state.sessions.map(session =>
-        session.id === sessionId
-          ? { ...session, ...updates }
-          : session
-      );
+  updateSession: (sessionId: string, updates: Partial<Session>) => {
+    set(state => ({
+      sessions: state.sessions.map(session =>
+        session.id === sessionId ? { ...session, ...updates } : session
+      ),
+      activeSessions: state.activeSessions.map(session =>
+        session.id === sessionId ? { ...session, ...updates } : session
+      )
+    }));
+  },
 
-      // 重新计算活跃会话和统计
-      const activeSessions = updatedSessions.filter(
-        session => session.status === 'active'
-      );
+  // 完成会话
+  completeSession: async (sessionId: string, transcription: string, response: string) => {
+    try {
+      const updatedSession = await sessionsApi.completeSession(sessionId, transcription, response);
 
-      const today = new Date().toDateString();
-      const todaySessions = updatedSessions.filter(
-        session => new Date(session.startTime).toDateString() === today
-      );
+      set(state => ({
+        sessions: state.sessions.map(session =>
+          session.id === sessionId ? updatedSession : session
+        ),
+        activeSessions: state.activeSessions.filter(session => session.id !== sessionId)
+      }));
+    } catch (error) {
+      console.error('Failed to complete session:', error);
+      set({
+        error: error instanceof Error ? error.message : 'Failed to complete session'
+      });
+    }
+  },
 
-      return {
-        sessions: updatedSessions,
-        activeSessions,
-        stats: {
-          ...state.stats,
-          activeNow: activeSessions.length,
-          totalToday: todaySessions.length
-        }
-      };
-    });
-  }
+  // 中断会话
+  interruptSession: async (sessionId: string) => {
+    try {
+      const updatedSession = await sessionsApi.interruptSession(sessionId);
+
+      set(state => ({
+        sessions: state.sessions.map(session =>
+          session.id === sessionId ? updatedSession : session
+        ),
+        activeSessions: state.activeSessions.filter(session => session.id !== sessionId)
+      }));
+    } catch (error) {
+      console.error('Failed to interrupt session:', error);
+      set({
+        error: error instanceof Error ? error.message : 'Failed to interrupt session'
+      });
+    }
+  },
+
+  // 删除会话
+  deleteSession: async (sessionId: string) => {
+    try {
+      await sessionsApi.deleteSession(sessionId);
+
+      set(state => ({
+        sessions: state.sessions.filter(session => session.id !== sessionId),
+        activeSessions: state.activeSessions.filter(session => session.id !== sessionId)
+      }));
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      set({
+        error: error instanceof Error ? error.message : 'Failed to delete session'
+      });
+    }
+  },
 }));
+
+// WebSocket 消息处理器
+websocketService.connect({
+  onConnect: () => {
+    console.log('Session store connected to WebSocket');
+  },
+  onMessage: (message) => {
+    // 处理会话进度更新
+    if (message.SessionProgress) {
+      const { session_id, stage, progress, message: progressMessage } = message.SessionProgress;
+
+      // 更新会话进度信息
+      get().updateSession(session_id, {
+        // 这里可以添加进度相关的字段
+        // 例如：progress: progress, currentStage: stage, progressMessage
+      });
+
+      console.log(`Session ${session_id} progress: ${progress}% - ${progressMessage}`);
+    }
+  },
+  onDisconnect: () => {
+    console.log('Session store disconnected from WebSocket');
+  },
+  onError: (error) => {
+    console.error('Session store WebSocket error:', error);
+  },
+});
+
+export default useSessionStore;
