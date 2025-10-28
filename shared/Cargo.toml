@@ -35,3 +35,12 @@ regex = "1.10"
 
 # System info
 num_cpus = "1.16"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "json"] }
+
+# Async traits
+async-trait = "0.1"

@@ -1,11 +1,12 @@
 mod echokit_client;
 mod audio_processor;
 mod udp_server;
+mod mqtt_client;
 
 use anyhow::{Context, Result};
 use echo_shared::{
     EchoKitConfig, AudioFormat, WebSocketMessage, now_utc,
-    generate_session_id, DeviceStatus
+    generate_session_id, DeviceStatus, MqttConfig, TopicFilter, QoS, WakeReason
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -21,6 +22,8 @@ struct BridgeConfig {
     pub max_sessions: u32,
     pub session_timeout_seconds: i64,
     pub heartbeat_interval_seconds: u64,
+    pub mqtt_broker_host: String,
+    pub mqtt_broker_port: u16,
 }
 
 impl Default for BridgeConfig {
@@ -32,6 +35,8 @@ impl Default for BridgeConfig {
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟
             heartbeat_interval_seconds: 30,
+            mqtt_broker_host: "localhost".to_string(),
+            mqtt_broker_port: 1883,
         }
     }
 }
@@ -42,6 +47,7 @@ struct BridgeService {
     echokit_manager: Arc<echokit_client::EchoKitConnectionManager>,
     audio_processor: Arc<audio_processor::AudioProcessor>,
     udp_server: Arc<udp_server::UdpAudioServer>,
+    mqtt_client: Arc<mqtt_client::BridgeMqttClient>,
     active_sessions: Arc<RwLock<std::collections::HashMap<String, SessionInfo>>>,
     device_audio_output: mpsc::UnboundedSender<(String, Vec<u8>)>, // (device_id, audio_data)
 }
@@ -77,6 +83,19 @@ async fn main() -> Result<()> {
     // 创建设备音频输出通道
     let (audio_output_tx, audio_output_rx) = mpsc::unbounded_channel();
 
+    // 创建 MQTT 配置
+    let mqtt_config = MqttConfig {
+        broker_host: config.mqtt_broker_host.clone(),
+        broker_port: config.mqtt_broker_port,
+        client_id: format!("bridge-{}", uuid::Uuid::new_v4()),
+        username: std::env::var("MQTT_USERNAME").ok(),
+        password: std::env::var("MQTT_PASSWORD").ok(),
+        keep_alive: 60,
+        clean_session: true,
+        max_reconnect_attempts: 10,
+        reconnect_interval_ms: 5000,
+    };
+
     // 创建 EchoKit 连接管理器
     let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new(
         config.echokit_websocket_url.clone(),
@@ -94,12 +113,16 @@ async fn main() -> Result<()> {
         audio_processor.clone(),
     )?);
 
+    // 创建 MQTT 客户端
+    let mqtt_client = Arc::new(mqtt_client::BridgeMqttClient::new(mqtt_config)?);
+
     // 创建 Bridge 服务
     let bridge_service = BridgeService {
         config: config.clone(),
         echokit_manager: echokit_manager.clone(),
         audio_processor: audio_processor.clone(),
         udp_server: udp_server.clone(),
+        mqtt_client: mqtt_client.clone(),
         active_sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
         device_audio_output: audio_output_tx,
     };
@@ -143,12 +166,32 @@ async fn load_config() -> Result<BridgeConfig> {
             .with_context(|| "Invalid SESSION_TIMEOUT_SECONDS value")?;
     }
 
+    if let Ok(mqtt_host) = std::env::var("MQTT_BROKER_HOST") {
+        config.mqtt_broker_host = mqtt_host;
+    }
+
+    if let Ok(mqtt_port) = std::env::var("MQTT_BROKER_PORT") {
+        config.mqtt_broker_port = mqtt_port.parse()
+            .with_context(|| "Invalid MQTT_BROKER_PORT value")?;
+    }
+
     Ok(config)
 }
 
 impl BridgeService {
     // 启动 Bridge 服务
     async fn start(&self) -> Result<()> {
+        // 启动 MQTT 客户端
+        info!("Starting MQTT client...");
+        self.mqtt_client.start().await
+            .with_context(|| "Failed to start MQTT client")?;
+
+        // 订阅 MQTT 主题
+        self.mqtt_client.subscribe(&TopicFilter::all_device_config()).await?;
+        self.mqtt_client.subscribe(&TopicFilter::all_device_control()).await?;
+
+        info!("MQTT client started and subscribed to topics");
+
         // 启动 EchoKit 连接管理器
         self.echokit_manager.start().await
             .with_context(|| "Failed to start EchoKit connection manager")?;

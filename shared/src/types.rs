@@ -48,15 +48,13 @@ pub struct User {
     pub email: String,
     pub password_hash: String,
     pub role: UserRole,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UserRole {
     Admin,
     User,
-    Guest,
+    Viewer,
 }
 
 // 会话相关类型

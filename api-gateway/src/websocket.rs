@@ -5,7 +5,8 @@ use axum::{
     },
     response::Response,
 };
-use echo_shared::{WebSocketMessage, DeviceStatus, SessionStage, NotificationLevel};
+use echo_shared::{WebSocketMessage, DeviceStatus, SessionStage};
+use echo_shared::types::NotificationLevel;
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde_json;
 use std::collections::HashMap;
@@ -144,7 +145,7 @@ async fn handle_websocket(socket: WebSocket) {
                 } else {
                     DeviceStatus::Offline
                 },
-                timestamp: echo_shared::now_utc(),
+                timestamp: chrono::Utc::now(),
             };
 
             if let Err(e) = broadcaster.send(device_status_update) {

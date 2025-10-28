@@ -4,8 +4,9 @@ use axum::{
     routing::{get, post, put, delete},
     Router,
 };
-use echo_shared::{load_config, AppConfig};
+use echo_shared::{load_config, AppConfig, MqttConfig, TopicFilter, QoS};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -13,6 +14,7 @@ use tower_http::{
 };
 use tracing::{info, Level};
 use tracing_subscriber;
+use tokio::sync::broadcast;
 
 mod auth;
 mod handlers;
@@ -21,9 +23,18 @@ mod models;
 mod utils;
 mod websocket;
 mod mqtt;
+mod storage;
+mod device_service;
+mod user_service;
+mod app_state;
 
 use handlers::{auth::auth_routes, devices::device_routes, sessions::session_routes, health::health_routes};
 use middleware::{auth_middleware, request_logging};
+use mqtt::{ApiGatewayMqttClient, mqtt_routes};
+use storage::{Storage, StorageConfig};
+use device_service::DeviceService;
+use user_service::UserService;
+use app_state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,8 +48,64 @@ async fn main() -> Result<()> {
     let config = load_config()?;
     info!("Configuration loaded successfully");
 
+    // 初始化存储层
+    let storage_config = StorageConfig::default();
+    info!("Initializing storage layer...");
+    let storage = Arc::new(Storage::new(storage_config).await?);
+    info!("Storage layer initialized successfully");
+
+    // 创建 WebSocket 广播器
+    let (websocket_tx, _websocket_rx) = broadcast::channel(1000);
+
+    // 创建 MQTT 配置
+    let mqtt_config = MqttConfig {
+        broker_host: std::env::var("MQTT_BROKER_HOST")
+            .unwrap_or_else(|_| "localhost".to_string()),
+        broker_port: std::env::var("MQTT_BROKER_PORT")
+            .unwrap_or_else(|_| "1883".to_string())
+            .parse()
+            .unwrap_or(1883),
+        client_id: format!("api-gateway-{}", uuid::Uuid::new_v4()),
+        username: std::env::var("MQTT_USERNAME").ok(),
+        password: std::env::var("MQTT_PASSWORD").ok(),
+        keep_alive: 60,
+        clean_session: true,
+        max_reconnect_attempts: 10,
+        reconnect_interval_ms: 5000,
+    };
+
+    // 创建 MQTT 客户端
+    let mqtt_client = Arc::new(ApiGatewayMqttClient::new(
+        mqtt_config.clone(),
+        websocket_tx,
+    )?);
+
+    // 启动 MQTT 客户端
+    info!("Starting MQTT client...");
+    mqtt_client.start().await?;
+
+    // 订阅主题
+    mqtt_client.subscribe(&TopicFilter::all_device_status()).await?;
+    mqtt_client.subscribe(&TopicFilter::all_device_wake()).await?;
+    mqtt_client.subscribe(&TopicFilter::system_status()).await?;
+
+    info!("MQTT client started and subscribed to topics");
+
+    // 创建服务层
+    let device_service = Arc::new(DeviceService::new(storage.db.clone(), storage.cache.clone()));
+    let user_service = Arc::new(UserService::new(storage.db.clone(), storage.cache.clone()));
+
+    // 创建应用状态
+    let app_state = Arc::new(AppState::new(
+        storage.clone(),
+        device_service.clone(),
+        user_service.clone(),
+        mqtt_client.clone(),
+        websocket_tx.clone(),
+    ));
+
     // 构建应用
-    let app = create_app(config.clone()).await?;
+    let app = create_app(config.clone(), app_state.clone()).await?;
 
     // 启动服务器
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
@@ -50,7 +117,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn create_app(config: AppConfig) -> Result<Router> {
+async fn create_app(config: AppConfig, app_state: Arc<AppState>) -> Result<Router> {
     // 创建中间件层
     let middleware_layer = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
@@ -70,6 +137,9 @@ async fn create_app(config: AppConfig) -> Result<Router> {
         .nest("/api/v1", device_routes())
         .nest("/api/v1", session_routes())
 
+        // MQTT 路由
+        .nest("/api/v1", mqtt_routes())
+
         // WebSocket 路由
         .route("/ws", get(websocket::websocket_handler))
 
@@ -77,7 +147,7 @@ async fn create_app(config: AppConfig) -> Result<Router> {
         .layer(middleware_layer)
 
         // 添加状态
-        .with_state(config);
+        .with_state(app_state);
 
     Ok(app)
 }

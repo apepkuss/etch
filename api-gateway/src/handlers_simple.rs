@@ -1,12 +1,13 @@
 use axum::response::Json;
-use echo_shared::{ApiResponse, Device, DeviceType, DeviceStatus, Session, SessionStatus, now_utc};
+use echo_shared::{ApiResponse, Device, DeviceType, DeviceStatus, Session, SessionStatus};
+use chrono::Utc;
 use serde_json::json;
 
 // 健康检查
 pub async fn health_check() -> Json<ApiResponse<serde_json::Value>> {
     let health_data = json!({
         "status": "healthy",
-        "timestamp": now_utc().timestamp(),
+        "timestamp": Utc::now().timestamp(),
         "service": "echo-api-gateway",
         "version": "0.1.0"
     });
@@ -26,7 +27,7 @@ pub async fn get_devices() -> Json<ApiResponse<Vec<Device>>> {
             firmware_version: "1.2.3".to_string(),
             battery_level: 85,
             volume: 60,
-            last_seen: now_utc(),
+            last_seen: Utc::now(),
             is_online: true,
             owner: "user001".to_string(),
         },
@@ -39,7 +40,7 @@ pub async fn get_devices() -> Json<ApiResponse<Vec<Device>>> {
             firmware_version: "1.2.2".to_string(),
             battery_level: 45,
             volume: 30,
-            last_seen: now_utc(),
+            last_seen: Utc::now(),
             is_online: false,
             owner: "user001".to_string(),
         },
@@ -52,7 +53,7 @@ pub async fn get_devices() -> Json<ApiResponse<Vec<Device>>> {
             firmware_version: "1.2.3".to_string(),
             battery_level: 92,
             volume: 40,
-            last_seen: now_utc(),
+            last_seen: Utc::now(),
             is_online: true,
             owner: "user001".to_string(),
         },
@@ -86,8 +87,8 @@ pub async fn get_sessions() -> Json<ApiResponse<Vec<Session>>> {
             id: "sess001".to_string(),
             device_id: "dev001".to_string(),
             user_id: "user001".to_string(),
-            start_time: now_utc(),
-            end_time: Some(now_utc()),
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
             duration: Some(120),
             transcription: Some("今天天气怎么样".to_string()),
             response: Some("今天天气晴朗，温度25摄氏度，适合外出活动。".to_string()),
@@ -97,7 +98,7 @@ pub async fn get_sessions() -> Json<ApiResponse<Vec<Session>>> {
             id: "sess002".to_string(),
             device_id: "dev002".to_string(),
             user_id: "user001".to_string(),
-            start_time: now_utc(),
+            start_time: Utc::now(),
             end_time: None,
             duration: None,
             transcription: Some("播放一些音乐".to_string()),

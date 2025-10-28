@@ -541,6 +541,7 @@ name = "echo-shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bcrypt",
  "chrono",
  "config",
@@ -548,9 +549,11 @@ dependencies = [
  "jsonwebtoken",
  "num_cpus",
  "prost",
+ "redis",
  "regex",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 1.0.69",
  "tonic",
  "uuid",
