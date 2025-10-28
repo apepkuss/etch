@@ -1,0 +1,236 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: echo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: echo_db
+      POSTGRES_USER: echo_user
+      POSTGRES_PASSWORD: echo_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echo_user -d echo_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: echo-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_password
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # pgAdmin 数据库管理
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: echo-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@echo-system.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "9035:80"
+    networks:
+      - echo-network
+    depends_on:
+      - postgres
+
+  # Redis Commander 管理界面
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: echo-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis_password
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin123
+    ports:
+      - "9036:8081"
+    networks:
+      - echo-network
+    depends_on:
+      - redis
+
+  # EchoKit Server AI 推理服务 (从官方 releases 下载)
+  echokit-server:
+    build:
+      context: ./echokit-server-deployment
+      dockerfile: Dockerfile
+    container_name: echo-echokit-server
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+      ECHOKET_CONFIG: /app/config/config.toml
+    volumes:
+      - ./echokit-server-deployment/config:/app/config:ro
+      - echokit_logs:/app/logs
+    ports:
+      - "9034:9988"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9988/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Bridge 服务
+  bridge:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile
+    container_name: echo-bridge
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
+      REDIS_URL: redis://:redis_password@redis:6379
+      # EchoKit Server 配置
+      ECHOKIT_WEBSOCKET_URL: ws://echokit-server:9988/v1/realtime
+      ECHOKET_API_BASE_URL: http://echokit-server:9988
+      # MQTT 配置
+      MQTT_BROKER_URL: tcp://mqtt:1883
+      # 网络配置
+      WEBSOCKET_PORT: 8082
+      UDP_PORT: 8083
+    ports:
+      - "9032:8082"  # WebSocket
+      - "9033:8083"  # UDP
+    networks:
+      - echo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      echokit-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: echo-api-gateway
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
+      REDIS_URL: redis://:redis_password@redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRATION_HOURS: 24
+      # 服务发现
+      BRIDGE_WEBSOCKET_URL: ws://bridge:8082
+      # CORS 配置
+      CORS_ORIGINS: "http://localhost:9030,http://localhost:3000"
+    ports:
+      - "9031:8080"
+    networks:
+      - echo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bridge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Web 管理界面
+  web-management:
+    build:
+      context: ./echo-web-management
+      dockerfile: Dockerfile
+    container_name: echo-web-management
+    restart: unless-stopped
+    environment:
+      REACT_APP_API_BASE_URL: http://localhost:9031
+      REACT_APP_WS_URL: ws://localhost:9031
+    ports:
+      - "9030:5174"
+    networks:
+      - echo-network
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5174/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MQTT Broker (可选)
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: echo-mqtt
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt_data:/mosquitto/data
+      - mqtt_logs:/mosquitto/log
+    ports:
+      - "9037:1883"
+      - "9038:9001"
+    networks:
+      - echo-network
+
+# 网络配置
+networks:
+  echo-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# 数据卷
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  echokit_logs:
+    driver: local
+  mqtt_data:
+    driver: local
+  mqtt_logs:
+    driver: local
