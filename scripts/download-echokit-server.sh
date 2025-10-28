@@ -84,7 +84,6 @@ create_directories() {
 
 # 检测系统架构
 detect_architecture() {
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
     local arch=$(uname -m)
 
     case $arch in
@@ -94,24 +93,21 @@ detect_architecture() {
         aarch64|arm64)
             arch="aarch64"
             ;;
-        armv7l)
-            arch="armv7"
-            ;;
         *)
             print_error "不支持的架构: $arch"
             exit 1
             ;;
     esac
 
-    echo "${os}-${arch}"
+    echo "$arch"
 }
 
 # 下载 EchoKit Server
 download_echokit_server() {
     print_info "下载 EchoKit Server $ECHOKIT_VERSION..."
 
-    local platform=$(detect_architecture)
-    local filename="echokit_server-${ECHOKIT_VERSION}-${platform}-unknown-linux-gnu.tar.gz"
+    local arch=$(detect_architecture)
+    local filename="echokit_server-${ECHOKIT_VERSION}-${arch}-unknown-linux-gnu.tar.gz"
     local download_url="https://github.com/$ECHOKIT_REPO/releases/download/$ECHOKIT_VERSION/$filename"
     local download_path="$DOWNLOAD_DIR/$filename"
 
