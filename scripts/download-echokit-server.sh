@@ -129,12 +129,29 @@ download_echokit_server() {
     print_info "解压文件..."
     cd "$DOWNLOAD_DIR"
 
-    if tar -xzf "$filename" -C "../$ECHOKIT_SERVER_DIR" --strip-components=1; then
+    # 先解压到当前目录
+    if tar -xzf "$filename"; then
         print_success "解压完成"
     else
         print_error "解压失败"
         exit 1
     fi
+
+    # 确保目标目录存在
+    mkdir -p "../$ECHOKIT_SERVER_DIR"
+
+    # 复制 echokit_server 二进制文件到部署目录
+    if [ -f "echokit_server" ]; then
+        cp echokit_server "../$ECHOKIT_SERVER_DIR/"
+        chmod +x "../$ECHOKIT_SERVER_DIR/echokit_server"
+        print_success "二进制文件复制完成"
+    else
+        print_error "echokit_server 二进制文件未找到"
+        exit 1
+    fi
+
+    # 清理下载目录中的二进制文件
+    rm -f echokit_server
 
     cd ..
 }
