@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use echo_shared::{AudioChunk, AudioFormat, AudioProcessor, now_utc};
+use echo_shared::{AudioChunk, AudioFormat};
+use echo_shared::utils::now_utc;
+use crate::audio_processor::AudioProcessor;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -38,12 +40,12 @@ struct UdpAudioPacket {
 }
 
 impl UdpAudioServer {
-    pub fn new(
+    pub async fn new(
         bind_address: &str,
         audio_processor: Arc<AudioProcessor>,
     ) -> Result<Self> {
-        let socket = UdpSocket::bind(bind_address)
-            .with_context(|| format!("Failed to bind to UDP address: {}", bind_address))?;
+        let socket = UdpSocket::bind(bind_address).await
+            .map_err(|e| anyhow::anyhow!("Failed to bind to UDP address {}: {}", bind_address, e))?;
 
         info!("UDP Audio Server listening on: {}", bind_address);
 
@@ -158,7 +160,7 @@ impl UdpAudioServer {
 
     // 解析 UDP 数据包
     fn parse_udp_packet(data: Vec<u8>) -> Result<UdpAudioPacket> {
-        let mut cursor = Cursor::new(data);
+        let mut cursor = Cursor::new(data.clone());
 
         // 读取设备 ID 长度和 ID
         let device_id_len = cursor.read_u8()? as usize;
@@ -223,8 +225,8 @@ impl UdpAudioServer {
                 channels: 1,
                 sequence_number,
             };
-            registry.insert(device_id, device_info);
             info!("Registered new device: {}", device_id);
+            registry.insert(device_id, device_info);
         }
     }
 
@@ -279,7 +281,7 @@ impl UdpAudioServer {
             device_id: device_id.clone(),
             address: "0.0.0.0:0".parse().unwrap(), // 占位地址
             last_seen: now_utc(),
-            audio_format,
+            audio_format: audio_format.clone(),
             sample_rate,
             channels,
             sequence_number: 0,

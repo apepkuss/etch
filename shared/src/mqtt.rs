@@ -363,6 +363,18 @@ impl TopicFilter {
     pub fn device_config(device_id: &str) -> Self {
         Self::new(format!("device/{}/config", device_id), QoS::AtLeastOnce)
     }
+
+    pub fn all_device_config() -> Self {
+        Self::new("device/+/config".to_string(), QoS::AtLeastOnce)
+    }
+
+    pub fn all_device_control() -> Self {
+        Self::new("device/+/control".to_string(), QoS::AtLeastOnce)
+    }
+
+    pub fn device_control(device_id: &str) -> Self {
+        Self::new(format!("device/{}/control", device_id), QoS::AtLeastOnce)
+    }
 }
 
 // 消息构建器

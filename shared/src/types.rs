@@ -381,7 +381,7 @@ impl Default for EchoKitConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum AudioFormat {
     PCM16,
     WAV,
@@ -487,10 +487,44 @@ pub enum EchoKitClientMessage {
     Ping,
 }
 
-// EchoKit 服务端消息 (从 EchoKit Server 接收)
+// EchoKit 服务端消息 (从 EchoKit Server 接收) - 兼容OpenAI realtime API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum EchoKitServerMessage {
+    // OpenAI realtime API 格式消息
+    #[serde(rename = "session.created")]
+    SessionCreated {
+        event_id: String,
+        session: OpenAISession,
+    },
+
+    #[serde(rename = "conversation.created")]
+    ConversationCreated {
+        event_id: String,
+        conversation: OpenAIConversation,
+    },
+
+    #[serde(rename = "response.text")]
+    ResponseText {
+        event_id: String,
+        session_id: String,
+        text: String,
+    },
+
+    #[serde(rename = "response.audio")]
+    ResponseAudio {
+        event_id: String,
+        session_id: String,
+        audio: String, // Base64 encoded audio
+    },
+
+    #[serde(rename = "error")]
+    OpenAIError {
+        event_id: String,
+        error: OpenAIError,
+    },
+
+    // 原有格式消息（向后兼容）
     SessionStarted {
         session_id: String,
         device_id: String,
@@ -542,4 +576,77 @@ pub fn generate_session_id() -> String {
 pub fn generate_device_id() -> String {
     use uuid::Uuid;
     format!("dev_{}", Uuid::new_v4().to_string()[..8].to_lowercase())
+}
+
+// ============================================================================
+// 简化版 OpenAI realtime API 协议类型定义
+// ============================================================================
+
+// OpenAI Session 信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAISession {
+    pub id: String,
+    pub object: String, // "realtime.session"
+    pub model: String,
+    pub modalities: Vec<String>, // ["text", "audio"]
+    pub instructions: Option<String>,
+    pub voice: Option<String>,
+    pub input_audio_format: String, // "pcm16"
+    pub output_audio_format: String, // "pcm16"
+    pub temperature: Option<f32>,
+}
+
+// OpenAI Conversation 信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIConversation {
+    pub id: String,
+    pub object: String, // "realtime.conversation"
+}
+
+// OpenAI Error 信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIError {
+    pub code: Option<String>,
+    pub message: String,
+    pub param: Option<String>,
+    pub type_: String, // "invalid_request_error", etc.
+}
+
+// OpenAI 客户端事件类型 (发送到服务器)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum OpenAIClientEvent {
+    #[serde(rename = "session.update")]
+    SessionUpdate {
+        event_id: Option<String>,
+        session: OpenAISessionConfig,
+    },
+
+    #[serde(rename = "input_audio_buffer.append")]
+    InputAudioBufferAppend {
+        event_id: Option<String>,
+        audio: String, // Base64 encoded audio
+    },
+
+    #[serde(rename = "response.create")]
+    ResponseCreate {
+        event_id: Option<String>,
+        response: Option<OpenAIResponseConfig>,
+    },
+}
+
+// OpenAI Session 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAISessionConfig {
+    pub instructions: Option<String>,
+    pub voice: Option<String>,
+    pub temperature: Option<f32>,
+}
+
+// OpenAI Response 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIResponseConfig {
+    pub modalities: Option<Vec<String>>,
+    pub instructions: Option<String>,
+    pub voice: Option<String>,
 }

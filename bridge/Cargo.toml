@@ -17,6 +17,13 @@ prost = "0.12"
 # WebSocket
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
+futures = "0.3"
+url = "2.5"
+
+# HTTP server
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
 
 # MQTT
 rumqttc = "0.24"

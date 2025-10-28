@@ -5,13 +5,16 @@ mod mqtt_client;
 
 use anyhow::{Context, Result};
 use echo_shared::{
-    EchoKitConfig, AudioFormat, WebSocketMessage, now_utc,
-    generate_session_id, DeviceStatus, MqttConfig, TopicFilter, QoS, WakeReason
+    EchoKitConfig, AudioFormat, WebSocketMessage,
+    generate_session_id, DeviceStatus, TopicFilter, QoS, WakeReason
 };
+use echo_shared::mqtt::MqttConfig;
+use echo_shared::utils::now_utc;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{info, warn, error, debug};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use axum::{extract::State, response::Json, routing::get, Router};
 
 // Bridge 服务配置
 #[derive(Debug, Clone)]
@@ -30,7 +33,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             udp_bind_address: "0.0.0.0:8081".to_string(),
-            echokit_websocket_url: "ws://localhost:9988/ws".to_string(),
+            echokit_websocket_url: "ws://localhost:9988/v1/realtime".to_string(),
             api_gateway_websocket_url: "ws://localhost:8080/ws".to_string(),
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟
@@ -104,14 +107,14 @@ async fn main() -> Result<()> {
     // 创建音频处理器
     let audio_processor = Arc::new(audio_processor::AudioProcessor::new(
         echokit_manager.get_client(),
-        audio_output_tx,
+        audio_output_tx.clone(),
     ));
 
     // 创建 UDP 服务器
     let udp_server = Arc::new(udp_server::UdpAudioServer::new(
         &config.udp_bind_address,
         audio_processor.clone(),
-    )?);
+    ).await?);
 
     // 创建 MQTT 客户端
     let mqtt_client = Arc::new(mqtt_client::BridgeMqttClient::new(mqtt_config)?);
@@ -128,7 +131,7 @@ async fn main() -> Result<()> {
     };
 
     // 启动各个组件
-    bridge_service.start().await?;
+    bridge_service.start(audio_output_rx).await?;
 
     info!("Echo Bridge Service started successfully!");
 
@@ -180,17 +183,17 @@ async fn load_config() -> Result<BridgeConfig> {
 
 impl BridgeService {
     // 启动 Bridge 服务
-    async fn start(&self) -> Result<()> {
+    async fn start(&self, audio_output_rx: mpsc::UnboundedReceiver<(String, Vec<u8>)>) -> Result<()> {
         // 启动 MQTT 客户端
         info!("Starting MQTT client...");
         self.mqtt_client.start().await
             .with_context(|| "Failed to start MQTT client")?;
 
-        // 订阅 MQTT 主题
-        self.mqtt_client.subscribe(&TopicFilter::all_device_config()).await?;
-        self.mqtt_client.subscribe(&TopicFilter::all_device_control()).await?;
+        // 订阅 MQTT 主题 (暂时注释以专注于EchoKit连接测试)
+        // self.mqtt_client.subscribe(&TopicFilter::all_device_config()).await?;
+        // self.mqtt_client.subscribe(&TopicFilter::all_device_control()).await?;
 
-        info!("MQTT client started and subscribed to topics");
+        info!("MQTT client started (subscriptions temporarily disabled for EchoKit testing)");
 
         // 启动 EchoKit 连接管理器
         self.echokit_manager.start().await
@@ -201,7 +204,7 @@ impl BridgeService {
             .with_context(|| "Failed to start UDP server")?;
 
         // 启动音频输出处理器
-        self.start_audio_output_handler().await?;
+        self.start_audio_output_handler(audio_output_rx).await?;
 
         // 启动会话超时检查
         self.start_session_timeout_check().await?;
@@ -214,12 +217,11 @@ impl BridgeService {
     }
 
     // 启动音频输出处理器
-    async fn start_audio_output_handler(&self) -> Result<()> {
-        let mut receiver = self.device_audio_output.clone();
+    async fn start_audio_output_handler(&self, mut audio_output_rx: mpsc::UnboundedReceiver<(String, Vec<u8>)>) -> Result<()> {
         let udp_server = self.udp_server.clone();
 
         tokio::spawn(async move {
-            while let Some((device_id, audio_data)) = receiver.recv().await {
+            while let Some((device_id, audio_data)) = audio_output_rx.recv().await {
                 if let Err(e) = udp_server.send_to_device(&device_id, audio_data).await {
                     error!("Failed to send audio output to device {}: {}", device_id, e);
                 }
@@ -300,10 +302,8 @@ impl BridgeService {
 
             info!("Health check service listening on: {}", bind_address);
 
-            if let Err(e) = axum::Server::bind(&bind_address.parse().unwrap())
-                .serve(app.into_make_service())
-                .await
-            {
+            let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
+            if let Err(e) = axum::serve(listener, app).await {
                 error!("Health check service error: {}", e);
             }
         });
@@ -340,6 +340,7 @@ impl BridgeService {
 }
 
 // 应用状态（用于健康检查服务）
+#[derive(Clone)]
 struct AppState {
     echokit_manager: Arc<echokit_client::EchoKitConnectionManager>,
     udp_server: Arc<udp_server::UdpAudioServer>,
