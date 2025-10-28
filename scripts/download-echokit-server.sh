@@ -155,7 +155,7 @@ max_connections = 1000
 
 [logging]
 level = "info"
-file = "/app/logs/echokit-server.log"
+file = "/app/logs/echokit_server.log"
 
 [ai]
 model = "default"
@@ -207,7 +207,7 @@ print_info "配置文件: $ECHOKET_CONFIG"
 mkdir -p /app/logs
 
 # 启动服务器
-exec ./echokit-server --config "$ECHOKET_CONFIG"
+exec ./echokit_server --config "$ECHOKET_CONFIG"
 EOF
 
     chmod +x "$ECHOKIT_SERVER_DIR/start.sh"
@@ -235,7 +235,7 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -r echokit && useradd -r -g echokit echokit
 
 # 复制 EchoKit Server 二进制文件和配置
-COPY echokit-server /app/echokit-server
+COPY echokit_server /app/echokit_server
 COPY config/ /app/config/
 COPY start.sh /app/start.sh
 
