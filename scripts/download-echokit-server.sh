@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置
-ECHOKIT_VERSION="v0.1.0"
+ECHOKIT_VERSION="v0.1.2"
 ECHOKIT_REPO="second-state/echokit_server"
 DOWNLOAD_DIR="./downloads"
 ECHOKIT_SERVER_DIR="./echokit-server-deployment"
@@ -111,7 +111,7 @@ download_echokit_server() {
     print_info "下载 EchoKit Server $ECHOKIT_VERSION..."
 
     local platform=$(detect_architecture)
-    local filename="echokit-server-${ECHOKIT_VERSION}-${platform}.tar.gz"
+    local filename="echokit_server-${ECHOKIT_VERSION}-${platform}-unknown-linux-gnu.tar.gz"
     local download_url="https://github.com/$ECHOKIT_REPO/releases/download/$ECHOKIT_VERSION/$filename"
     local download_path="$DOWNLOAD_DIR/$filename"
 
