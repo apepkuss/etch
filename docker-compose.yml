@@ -74,6 +74,13 @@ services:
     depends_on:
       - redis
 
+  # 共享库基础镜像
+  echo-shared:
+    build:
+      context: ./shared
+      dockerfile: Dockerfile
+    image: echo-shared:latest
+
   # EchoKit Server AI 推理服务 (从官方 releases 下载)
   echokit-server:
     build:
@@ -101,8 +108,8 @@ services:
   # Bridge 服务
   bridge:
     build:
-      context: .
-      dockerfile: ./bridge/Dockerfile
+      context: ./bridge
+      dockerfile: Dockerfile
     container_name: echo-bridge
     restart: unless-stopped
     environment:
@@ -139,8 +146,8 @@ services:
   # API Gateway
   api-gateway:
     build:
-      context: .
-      dockerfile: ./api-gateway/Dockerfile
+      context: ./api-gateway
+      dockerfile: Dockerfile
     container_name: echo-api-gateway
     restart: unless-stopped
     environment:

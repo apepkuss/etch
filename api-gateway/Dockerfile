@@ -10,16 +10,12 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制共享库
-COPY shared /shared
-RUN cd /shared && cargo build --release
-
 # 复制API Gateway Cargo文件
-COPY api-gateway/Cargo.toml api-gateway/Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 
 # 创建源代码目录并复制
 RUN mkdir src
-COPY api-gateway/src ./src
+COPY src ./src
 
 # 构建API Gateway
 RUN cargo build --release
@@ -42,7 +38,6 @@ WORKDIR /app
 
 # 从构建阶段复制编译后的二进制文件
 COPY --from=builder /app/target/release/mvp_demo /usr/local/bin/
-COPY --from=builder /shared/target/release/libecho_shared.so /usr/local/lib/
 
 # 更改文件所有权
 RUN chown -R gateway:gateway /app

@@ -10,16 +10,12 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制共享库
-COPY shared /shared
-RUN cd /shared && cargo build --release
-
 # 复制Bridge服务Cargo文件
-COPY bridge/Cargo.toml bridge/Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 
 # 创建源代码目录并复制
 RUN mkdir src
-COPY bridge/src ./src
+COPY src ./src
 
 # 构建Bridge服务
 RUN cargo build --release
@@ -42,7 +38,6 @@ WORKDIR /app
 
 # 从构建阶段复制编译后的二进制文件
 COPY --from=builder /app/target/release/echo-bridge /usr/local/bin/
-COPY --from=builder /shared/target/release/libecho_shared.so /usr/local/lib/
 
 # 创建配置目录
 RUN mkdir -p /app/config
