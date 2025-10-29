@@ -161,7 +161,17 @@ jobs:
 
       - name: Start services
         run: |
-          # 设置超时时间
+          # 清理可能存在的容器和端口占用
+          echo "=== 清理现有容器 ==="
+          docker compose down -v --remove-orphans || true
+          docker system prune -f || true
+
+          # 等待端口释放
+          echo "=== 等待端口释放 ==="
+          sleep 10
+
+          # 设置超时时间并启动服务
+          echo "=== 启动服务 ==="
           timeout 10m docker compose up -d
 
       - name: Wait for services to be ready
@@ -209,7 +219,10 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          docker compose down -v || true
+          echo "=== 清理测试资源 ==="
+          docker compose down -v --remove-orphans || true
+          docker system prune -f || true
+          echo "=== 清理完成 ==="
 
   # 端到端测试
   e2e-tests:
@@ -232,6 +245,15 @@ jobs:
           # 调整端口
           sed -i 's/9030:/9230:/g' .env
           sed -i 's/9031:/9231:/g' .env
+
+          # 清理可能存在的容器和端口占用
+          echo "=== 清理现有容器 ==="
+          docker compose down -v --remove-orphans || true
+          docker system prune -f || true
+
+          # 等待端口释放
+          echo "=== 等待端口释放 ==="
+          sleep 10
 
           # 下载 EchoKit Server
           ./scripts/download-echokit-server.sh latest
@@ -264,7 +286,10 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          docker compose down -v || true
+          echo "=== 清理测试资源 ==="
+          docker compose down -v --remove-orphans || true
+          docker system prune -f || true
+          echo "=== 清理完成 ==="
           rm -f .env integration-test-report-*.txt || true
 
   # 部署状态检查
