@@ -150,11 +150,11 @@ __tests__/
 *.bak
 *.tmp
 
-# Development scripts
-scripts/
-start.sh
-deploy.sh
+# Development scripts (keep for CI builds)
+!scripts/
+!start.sh
+!deploy.sh
 
-# EchoKit Server downloaded files
-downloads/
-echokit-server-deployment/
+# EchoKit Server downloaded files (keep for CI builds)
+!downloads/
+!echokit-server-deployment/
