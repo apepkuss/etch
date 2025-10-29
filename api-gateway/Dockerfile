@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制共享库
-COPY shared /shared
+COPY shared/ /shared/
 RUN cd /shared && cargo build --release
 
 # 复制API Gateway Cargo文件
@@ -19,7 +19,7 @@ COPY api-gateway/Cargo.toml api-gateway/Cargo.lock ./
 
 # 创建源代码目录并复制
 RUN mkdir src
-COPY api-gateway/src ./src
+COPY api-gateway/src/ ./src/
 
 # 构建API Gateway
 RUN cargo build --release
