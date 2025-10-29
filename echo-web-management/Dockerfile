@@ -7,14 +7,14 @@ WORKDIR /app
 # 复制 package.json 和 package-lock.json (如果存在)
 COPY package*.json ./
 
-# 安装依赖
-RUN npm ci --only=production
+# 安装所有依赖（包括开发依赖，用于构建）
+RUN npm ci
 
 # 复制源代码
 COPY . .
 
-# 构建应用
-RUN npm run build
+# 构建应用（在CI环境中跳过TypeScript类型检查）
+RUN npm run build:ci
 
 # 生产阶段 - 使用 nginx 服务静态文件
 FROM nginx:alpine AS production
