@@ -159,3 +159,7 @@ __tests__/
 # EchoKit Server downloaded files (keep for CI builds)
 !downloads/
 !echokit-server-deployment/
+
+# Temporary shared library copies for Docker builds
+!bridge/shared_temp/
+!api-gateway/shared_temp/

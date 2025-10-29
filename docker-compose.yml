@@ -108,8 +108,8 @@ services:
   # Bridge 服务
   bridge:
     build:
-      context: .
-      dockerfile: ./bridge/Dockerfile
+      context: ./bridge
+      dockerfile: Dockerfile
     container_name: echo-bridge
     restart: unless-stopped
     environment:
@@ -146,8 +146,8 @@ services:
   # API Gateway
   api-gateway:
     build:
-      context: .
-      dockerfile: ./api-gateway/Dockerfile
+      context: ./api-gateway
+      dockerfile: Dockerfile
     container_name: echo-api-gateway
     restart: unless-stopped
     environment:
