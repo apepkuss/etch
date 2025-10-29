@@ -11,15 +11,15 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制共享库
-COPY ./shared /shared
+COPY shared /shared
 RUN cd /shared && cargo build --release
 
 # 复制Bridge服务Cargo文件
-COPY ./bridge/Cargo.toml ./bridge/Cargo.lock ./
+COPY bridge/Cargo.toml bridge/Cargo.lock ./
 
 # 创建源代码目录并复制
 RUN mkdir src
-COPY ./bridge/src ./src
+COPY bridge/src ./src
 
 # 构建Bridge服务
 RUN cargo build --release
