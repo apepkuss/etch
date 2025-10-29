@@ -200,7 +200,7 @@ jobs:
 
       - name: Upload test artifacts
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ matrix.test-suite.name }}
           path: service-logs-${{ matrix.test-suite.name }}.txt
@@ -255,7 +255,7 @@ jobs:
           fi
 
       - name: Upload test report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: integration-test-report
           path: test-report.txt
