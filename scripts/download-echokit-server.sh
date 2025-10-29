@@ -224,7 +224,7 @@ print_info "配置文件: $ECHOKET_CONFIG"
 mkdir -p /app/logs
 
 # 启动服务器
-exec ./echokit_server --config "$ECHOKET_CONFIG"
+exec ./echokit_server "$ECHOKET_CONFIG"
 EOF
 
     chmod +x "$ECHOKIT_SERVER_DIR/start.sh"
