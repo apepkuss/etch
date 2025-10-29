@@ -129,7 +129,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 5432:5432
+          - 5433:5432
 
       redis:
         image: redis:7-alpine
@@ -139,7 +139,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 6379:6379
+          - 6380:6379
 
     steps:
       - name: Checkout code
@@ -154,6 +154,9 @@ jobs:
           # 调整端口以避免冲突
           sed -i 's/9030:/9130:/g' .env
           sed -i 's/9031:/9131:/g' .env
+          # 调整数据库端口以避免与本地进程冲突
+          sed -i 's/5432:5432/5433:5432/g' .env
+          sed -i 's/6379:6379/6380:6379/g' .env
 
       - name: Download EchoKit Server
         run: |
@@ -245,6 +248,9 @@ jobs:
           # 调整端口
           sed -i 's/9030:/9230:/g' .env
           sed -i 's/9031:/9231:/g' .env
+          # 调整数据库端口以避免与本地进程冲突
+          sed -i 's/5432:5432/5434:5432/g' .env
+          sed -i 's/6379:6379/6381:6379/g' .env
 
           # 清理可能存在的容器和端口占用
           echo "=== 清理现有容器 ==="
