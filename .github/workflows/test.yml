@@ -16,9 +16,9 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
-env:
-  DOCKER_BUILDKIT: 1
-  COMPOSE_DOCKER_CLI_BUILD: 1
+# env:
+#   DOCKER_BUILDKIT: 1
+#   COMPOSE_DOCKER_CLI_BUILD: 1
 
 jobs:
   # # 基础代码检查
@@ -95,13 +95,13 @@ jobs:
           ls -la shared/ || echo "❌ shared 不存在"
           ls -la echokit-server-deployment/ || echo "❌ echokit-server-deployment 不存在"
 
-          # 强制 Docker 重新识别构建上下文
+          # 清理 Docker 缓存
           echo "=== 清理 Docker 缓存 ==="
-          docker builder prune -f
+          docker system prune -f
 
           # 构建所有服务镜像
           echo "=== 开始构建 Docker 镜像 ==="
-          docker compose build --no-cache || docker compose build
+          docker compose build --no-cache
           echo "success=true" >> $GITHUB_OUTPUT
 
   # 集成测试
