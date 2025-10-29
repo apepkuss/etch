@@ -1,5 +1,5 @@
 # API Gateway Dockerfile
-FROM rust:1.75.0-slim as builder
+FROM rust:1.90.0-slim AS builder
 
 # 设置工作目录
 WORKDIR /app
