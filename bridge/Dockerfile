@@ -23,6 +23,8 @@ RUN mkdir src
 COPY src ./src
 
 # 构建Bridge服务
+# 设置环境变量禁用 SQLx 编译时检查
+ENV SQLX_OFFLINE=true
 RUN cargo build --release
 
 # 运行阶段
