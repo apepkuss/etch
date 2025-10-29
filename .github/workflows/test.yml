@@ -88,8 +88,20 @@ jobs:
           # 构建 EchoKit Server 下载
           ./scripts/download-echokit-server.sh latest
 
+          # 验证构建上下文文件存在
+          echo "=== 验证构建上下文 ==="
+          ls -la api-gateway/src/ || echo "❌ api-gateway/src 不存在"
+          ls -la bridge/src/ || echo "❌ bridge/src 不存在"
+          ls -la shared/ || echo "❌ shared 不存在"
+          ls -la echokit-server-deployment/ || echo "❌ echokit-server-deployment 不存在"
+
+          # 强制 Docker 重新识别构建上下文
+          echo "=== 清理 Docker 缓存 ==="
+          docker builder prune -f
+
           # 构建所有服务镜像
-          docker compose build
+          echo "=== 开始构建 Docker 镜像 ==="
+          docker compose build --no-cache || docker compose build
           echo "success=true" >> $GITHUB_OUTPUT
 
   # 集成测试
