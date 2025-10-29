@@ -8,6 +8,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    cmake \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制 shared库
