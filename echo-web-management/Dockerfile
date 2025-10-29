@@ -32,12 +32,12 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # 从构建阶段复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# 创建 nginx 日志目录
-RUN mkdir -p /var/log/nginx && \
+# 创建 nginx 所需目录并设置权限
+RUN mkdir -p /var/log/nginx /var/cache/nginx /var/run && \
     chown -R nextjs:nodejs /var/log/nginx && \
     chown -R nextjs:nodejs /usr/share/nginx/html && \
     chown -R nextjs:nodejs /var/cache/nginx && \
-    chown -R nextjs:nodejs /var/run/nginx.pid
+    chown -R nextjs:nodejs /var/run
 
 # 切换到非 root 用户
 USER nextjs
