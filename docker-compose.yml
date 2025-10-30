@@ -81,44 +81,44 @@ services:
       dockerfile: Dockerfile
     image: echo-shared:latest
 
-  # EchoKit Server AI 推理服务 (从官方 releases 下载)
-  echokit-server:
-    build:
-      context: ./echokit-server-deployment
-      dockerfile: Dockerfile
-    container_name: echo-echokit-server
-    restart: unless-stopped
-    environment:
-      RUST_LOG: info
-      ECHOKET_CONFIG: /app/config/config.toml
-    volumes:
-      - ./echokit-server-deployment/config:/app/config:ro
-      - echokit_logs:/app/logs
-    ports:
-      - "10030:9988"
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9988/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+  # EchoKit Server AI 推理服务 (使用外部服务，已注释)
+  # echokit-server:
+  #   build:
+  #     context: ./echokit-server-deployment
+  #     dockerfile: Dockerfile
+  #   container_name: echo-echokit-server
+  #   restart: unless-stopped
+  #   environment:
+  #     RUST_LOG: info
+  #     ECHOKET_CONFIG: /app/config/config.toml
+  #   volumes:
+  #     - ./echokit-server-deployment/config:/app/config:ro
+  #     - echokit_logs:/app/logs
+  #   ports:
+  #     - "10030:9988"
+  #   networks:
+  #     - echo-network
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:9988/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
 
   # Bridge 服务
   bridge:
     build:
-      context: ./bridge
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./bridge/Dockerfile
     container_name: echo-bridge
     restart: unless-stopped
     environment:
       RUST_LOG: info
       DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
       REDIS_URL: redis://:redis_password@redis:6379
-      # EchoKit Server 配置
-      ECHOKIT_WEBSOCKET_URL: ws://echokit-server:9988/v1/realtime
-      ECHOKET_API_BASE_URL: http://echokit-server:9988
+      # EchoKit Server 配置 (外部服务)
+      ECHOKIT_WEBSOCKET_URL: ws://eu.echokit.dev/ws
+      ECHOKET_API_BASE_URL: https://eu.echokit.dev
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883
       # 网络配置
@@ -134,8 +134,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      echokit-server:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
@@ -146,8 +144,8 @@ services:
   # API Gateway
   api-gateway:
     build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./api-gateway/Dockerfile
     container_name: echo-api-gateway
     restart: unless-stopped
     environment:

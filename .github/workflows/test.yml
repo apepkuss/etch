@@ -17,118 +17,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy-llamaedge-services:
-    runs-on: ubuntu-latest
-    outputs:
-      services-ready: ${{ steps.test.outputs.success }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy LlamaEdge Services
-        run: |
-          cd tests/echokit-server
-          docker compose -f docker-compose.llamaedge.yml up -d
-
-      - name: Show LlamaEdge Services Logs
-        id: test
-        run: |
-          echo "=== LlamaEdge Services Logs ==="
-          docker compose -f docker-compose.llamaedge.yml logs --tail=50
-
-          echo ""
-          echo "=== Container Status ==="
-          docker compose -f docker-compose.llamaedge.yml ps
-
-          echo ""
-          echo "=== Service Health Check ==="
-          # 检查llama-api-server
-          if curl -f http://localhost:9068/health >/dev/null 2>&1; then
-            echo "✅ llama-api-server (port 9068) is healthy"
-            llama_healthy=true
-          else
-            echo "❌ llama-api-server (port 9068) is not responding"
-            llama_healthy=false
-          fi
-
-          # 检查whisper-api-server
-          if curl -f http://localhost:9069/health >/dev/null 2>&1; then
-            echo "✅ whisper-api-server (port 9069) is healthy"
-            whisper_healthy=true
-          else
-            echo "❌ whisper-api-server (port 9069) is not responding"
-            whisper_healthy=false
-          fi
-
-          # 设置输出
-          if [ "$llama_healthy" = true ] && [ "$whisper_healthy" = true ]; then
-            echo "success=true" >> $GITHUB_OUTPUT
-          else
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-  # EchoKit Server 部署
-  deploy-echokit-server:
-    name: Deploy EchoKit Server
-    runs-on: ubuntu-latest
-    needs: [deploy-llamaedge-services]
-    if : needs.deploy-llamaedge-services.outputs.services-ready == 'true'
-    outputs:
-      echokit-ready: ${{ steps.test.outputs.success }}
-      echokit-port: ${{ steps.deploy.outputs.port }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup environment
-        run: |
-          cp .env.example .env
-          mkdir -p echokit_recordings logs
-          # 确保测试配置目录存在
-          mkdir -p tests/echokit-server
-
-      - name: Deploy EchoKit Server
-        id: deploy
-        run: |
-          echo "=== 部署 EchoKit Server ==="
-          docker pull secondstate/echokit:latest-server-vad
-
-          # 创建必要的目录
-          mkdir -p tests/echokit-server/echokit_recordings tests/echokit-server/logs
-
-          # 使用测试配置部署
-          cd tests/echokit-server
-          docker compose -f docker-compose.echokit.yml up -d
-
-          # 等待服务就绪
-          for i in {1..60}; do
-            if curl -f http://localhost:10030/health >/dev/null 2>&1; then
-              echo "✅ EchoKit Server 部署成功"
-              break
-            fi
-            echo "等待 EchoKit Server 启动... ($i/60)"
-            sleep 5
-          done
-
-          echo "port=10030" >> $GITHUB_OUTPUT
-
-      - name: Test EchoKit Server
-        id: test
-        run: |
-          cd tests/echokit-server
-          if bash test-echokit.sh; then
-            echo "success=true" >> $GITHUB_OUTPUT
-          else
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
   # PostgreSQL 部署
   deploy-postgres:
     name: Deploy PostgreSQL
     runs-on: ubuntu-latest
-    needs: [deploy-echokit-server]
     outputs:
       postgres-ready: ${{ steps.test.outputs.success }}
       postgres-port: ${{ steps.deploy.outputs.port }}
@@ -173,7 +65,6 @@ jobs:
   deploy-redis:
     name: Deploy Redis
     runs-on: ubuntu-latest
-    needs: [deploy-echokit-server]
     outputs:
       redis-ready: ${{ steps.test.outputs.success }}
       redis-port: ${{ steps.deploy.outputs.port }}
@@ -218,8 +109,8 @@ jobs:
   deploy-api-gateway:
     name: Deploy API Gateway
     runs-on: ubuntu-latest
-    needs: [deploy-postgres, deploy-redis, deploy-echokit-server]
-    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true' && needs.deploy-echokit-server.outputs.echokit-ready == 'true'
+    needs: [deploy-postgres, deploy-redis]
+    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true'
     outputs:
       api-gateway-ready: ${{ steps.test.outputs.success }}
       api-gateway-port: ${{ steps.deploy.outputs.port }}
@@ -231,13 +122,9 @@ jobs:
         run: |
           cp .env.example .env
           # 更新端口配置
-          sed -i 's/10030:/10030:/g' .env  # EchoKit Server 保持不变
           sed -i 's/10035:/15432:/g' .env  # PostgreSQL
           sed -i 's/10036:/16379:/g' .env  # Redis
           sed -i 's/10033:/18080:/g' .env  # API Gateway
-
-          # 创建共享库临时副本
-          cp -r shared api-gateway/shared_temp || echo "❌ 创建 api-gateway/shared_temp 失败"
 
       - name: Build and Deploy API Gateway
         id: deploy
@@ -274,8 +161,8 @@ jobs:
   deploy-bridge:
     name: Deploy Bridge Service
     runs-on: ubuntu-latest
-    needs: [deploy-postgres, deploy-redis, deploy-echokit-server, deploy-api-gateway]
-    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true' && needs.deploy-echokit-server.outputs.echokit-ready == 'true' && needs.deploy-api-gateway.outputs.api-gateway-ready == 'true'
+    needs: [deploy-postgres, deploy-redis, deploy-api-gateway]
+    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true' && needs.deploy-api-gateway.outputs.api-gateway-ready == 'true'
     outputs:
       bridge-ready: ${{ steps.test.outputs.success }}
       bridge-websocket-port: ${{ steps.deploy.outputs.websocket_port }}
@@ -288,15 +175,11 @@ jobs:
         run: |
           cp .env.example .env
           # 更新端口配置
-          sed -i 's/10030:/10030:/g' .env  # EchoKit Server 保持不变
           sed -i 's/10035:/15432:/g' .env  # PostgreSQL
           sed -i 's/10036:/16379:/g' .env  # Redis
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10031:/18082:/g' .env  # Bridge WebSocket
           sed -i 's/10032:/18083:/g' .env  # Bridge UDP
-
-          # 创建共享库临时副本
-          cp -r shared bridge/shared_temp || echo "❌ 创建 bridge/shared_temp 失败"
 
       - name: Build and Deploy Bridge
         id: deploy
@@ -389,7 +272,7 @@ jobs:
   health-check-after-deploy:
     name: System Health Check
     runs-on: ubuntu-latest
-    needs: [deploy-echokit-server, deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management]
+    needs: [deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management]
     if: always()
     steps:
       - name: System health report
@@ -400,7 +283,6 @@ jobs:
           echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
 
           services=(
-            "10030:EchoKit Server:✅ 运行中"
             "18080:API Gateway:✅ 运行中"
             "18082:Bridge WebSocket:✅ 运行中"
             "18084:Web Management:✅ 运行中"
@@ -416,10 +298,15 @@ jobs:
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 外部服务" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit Server | ws://eu.echokit.dev/ws |" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit API | https://eu.echokit.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 内部服务运行正常，使用外部 EchoKit Server" >> $GITHUB_STEP_SUMMARY
           echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
-          echo "- 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
-          echo "- 端到端测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "- 部署状态: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🎉 Echo System 已成功部署并通过所有测试！" >> $GITHUB_STEP_SUMMARY
 
@@ -427,9 +314,8 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [deploy-echokit-server, deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management, health-check-after-deploy]
+    needs: [deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management]
     if: |
-      needs.deploy-echokit-server.outputs.echokit-ready == 'true' &&
       needs.deploy-postgres.outputs.postgres-ready == 'true' &&
       needs.deploy-redis.outputs.redis-ready == 'true' &&
       needs.deploy-api-gateway.outputs.api-gateway-ready == 'true' &&
@@ -449,21 +335,12 @@ jobs:
         run: |
           cp .env.example .env
           # 设置测试端口配置
-          sed -i 's/10030:/10030:/g' .env  # EchoKit Server
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10034:/18084:/g' .env  # Web Management
 
       - name: Wait for all services
         run: |
           echo "=== 验证所有服务状态 ==="
-
-          # 检查 EchoKit Server
-          if curl -f http://localhost:10030/health >/dev/null 2>&1; then
-            echo "✅ EchoKit Server 就绪"
-          else
-            echo "❌ EchoKit Server 未就绪"
-            exit 1
-          fi
 
           # 检查 API Gateway
           if curl -f http://localhost:18080/health >/dev/null 2>&1; then
@@ -489,7 +366,7 @@ jobs:
           ./tests/integration/${{ matrix.test-suite.script }} \
             --api-url http://localhost:18080 \
             --web-url http://localhost:18084 \
-            --echokit-url http://localhost:10030 \
+            --echokit-url https://eu.echokit.dev \
             --timeout 300
 
       - name: Upload test results
@@ -516,7 +393,6 @@ jobs:
           echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
 
           services=(
-            "10030:EchoKit Server:✅ 运行中"
             "18080:API Gateway:✅ 运行中"
             "18082:Bridge WebSocket:✅ 运行中"
             "18084:Web Management:✅ 运行中"
@@ -532,20 +408,24 @@ jobs:
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 外部服务" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit Server | ws://eu.echokit.dev/ws |" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit API | https://eu.echokit.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 所有服务运行正常，集成测试通过" >> $GITHUB_STEP_SUMMARY
           echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
           echo "- 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
-          echo "- 端到端测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🎉 Echo System 已成功部署并通过所有测试！" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Echo System 已成功部署并通过集成测试！" >> $GITHUB_STEP_SUMMARY
 
   # 端到端测试
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
-    needs: [deploy-echokit-server, deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management, integration-tests, health-check-after-integration]
+    needs: [deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management, integration-tests, health-check-after-integration]
     if: |
-      needs.deploy-echokit-server.outputs.echokit-ready == 'true' &&
       needs.deploy-postgres.outputs.postgres-ready == 'true' &&
       needs.deploy-redis.outputs.redis-ready == 'true' &&
       needs.deploy-api-gateway.outputs.api-gateway-ready == 'true' &&
@@ -561,7 +441,6 @@ jobs:
         run: |
           cp .env.example .env
           # 设置完整的端口配置
-          sed -i 's/10030:/10030:/g' .env  # EchoKit Server
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10034:/18084:/g' .env  # Web Management
 
@@ -570,7 +449,6 @@ jobs:
           echo "=== 验证完整服务套件 ==="
 
           services=(
-            "10030:EchoKit Server"
             "18080:API Gateway"
             "18082:Bridge WebSocket"
             "18084:Web Management"
@@ -590,13 +468,25 @@ jobs:
             fi
           done
 
+      - name: Verify external EchoKit Server connectivity
+        run: |
+          echo "=== 验证外部 EchoKit Server 连接性 ==="
+
+          # 测试 WebSocket 连接（使用 curl 或 wget 进行基础连接测试）
+          if curl -f -s -m 10 https://eu.echokit.dev >/dev/null 2>&1; then
+            echo "✅ EchoKit Server (https://eu.echokit.dev) 可访问"
+          else
+            echo "❌ EchoKit Server (https://eu.echokit.dev) 不可访问"
+            echo "注意：这可能是网络问题，继续执行端到端测试"
+          fi
+
       - name: Run E2E tests
         run: |
           echo "=== 运行端到端测试 ==="
           timeout 20m ./tests/integration/run_all_tests.sh \
             --api-url http://localhost:18080 \
             --web-url http://localhost:18084 \
-            --echokit-url http://localhost:10030 \
+            --echokit-url https://eu.echokit.dev \
             --timeout 900
 
       - name: Upload E2E test results
@@ -611,20 +501,19 @@ jobs:
 
   # 系统健康检查
   health-check-after-tests:
-    name: System Health Check
+    name: Final System Health Check
     runs-on: ubuntu-latest
     needs: [integration-tests, e2e-tests]
     if: always() && (needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
     steps:
       - name: System health report
         run: |
-          echo "## 🚀 Echo System 健康检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Echo System 最终健康检查报告" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| 服务 | 状态 | 端口 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
 
           services=(
-            "10030:EchoKit Server:✅ 运行中"
             "18080:API Gateway:✅ 运行中"
             "18082:Bridge WebSocket:✅ 运行中"
             "18084:Web Management:✅ 运行中"
@@ -639,6 +528,12 @@ jobs:
             echo "| $name | $status | $port |" >> $GITHUB_STEP_SUMMARY
           done
 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 外部服务" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit Server | ws://eu.echokit.dev/ws |" >> $GITHUB_STEP_SUMMARY
+          echo "| EchoKit API | https://eu.echokit.dev |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
           echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
@@ -662,9 +557,5 @@ jobs:
           echo "=== 清理所有服务 ==="
           docker compose down -v --remove-orphans || true
           docker system prune -af || true
-
-          # 清理测试目录
-          rm -rf echokit_recordings logs || true
-          rm -f integration-test-report-*.txt test-report.txt || true
 
           echo "=== 清理完成 ==="
