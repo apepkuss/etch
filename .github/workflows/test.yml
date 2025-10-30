@@ -41,7 +41,7 @@ jobs:
 
           # 使用测试配置部署
           cd tests/echokit-server
-          docker-compose -f docker-compose.echokit.yml up -d
+          docker compose -f docker-compose.echokit.yml up -d
 
           # 等待服务就绪
           for i in {1..60}; do
