@@ -24,6 +24,7 @@ jobs:
     steps:
       - name: Deploy LlamaEdge Services
         run: |
+          cd tests/echokit-server
           docker compose -f docker-compose.llamaedge.yml up -d
 
       - name: Show LlamaEdge Services Logs
