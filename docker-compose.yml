@@ -13,7 +13,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
     ports:
-      - "5432:5432"
+      - "10035:5432"
     networks:
       - echo-network
     healthcheck:
@@ -31,7 +31,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "10036:6379"
     networks:
       - echo-network
     healthcheck:
@@ -52,7 +52,7 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     ports:
-      - "5050:80"
+      - "10037:80"
     networks:
       - echo-network
     depends_on:
@@ -68,7 +68,7 @@ services:
       HTTP_USER: admin
       HTTP_PASSWORD: admin123
     ports:
-      - "8081:8081"
+      - "10038:8081"
     networks:
       - echo-network
     depends_on:
@@ -95,7 +95,7 @@ services:
       - ./echokit-server-deployment/config:/app/config:ro
       - echokit_logs:/app/logs
     ports:
-      - "9988:9988"
+      - "10030:9988"
     networks:
       - echo-network
     healthcheck:
@@ -125,8 +125,8 @@ services:
       WEBSOCKET_PORT: 8082
       UDP_PORT: 8083
     ports:
-      - "8082:8082"  # WebSocket
-      - "8083:8083"  # UDP
+      - "10031:8082"  # WebSocket
+      - "10032:8083"  # UDP
     networks:
       - echo-network
     depends_on:
@@ -159,9 +159,9 @@ services:
       # 服务发现
       BRIDGE_WEBSOCKET_URL: ws://bridge:8082
       # CORS 配置
-      CORS_ORIGINS: "http://localhost:5174,http://localhost:3000"
+      CORS_ORIGINS: "http://localhost:10034,http://localhost:3000"
     ports:
-      - "8080:8080"
+      - "10033:8080"
     networks:
       - echo-network
     depends_on:
@@ -186,10 +186,10 @@ services:
     container_name: echo-web-management
     restart: unless-stopped
     environment:
-      REACT_APP_API_BASE_URL: http://localhost:8080
-      REACT_APP_WS_URL: ws://localhost:8080
+      REACT_APP_API_BASE_URL: http://localhost:10033
+      REACT_APP_WS_URL: ws://localhost:10033
     ports:
-      - "5174:5174"
+      - "10034:5174"
     networks:
       - echo-network
     depends_on:
@@ -212,8 +212,8 @@ services:
       - mqtt_data:/mosquitto/data
       - mqtt_logs:/mosquitto/log
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "10039:1883"
+      - "10040:9001"
     networks:
       - echo-network
 

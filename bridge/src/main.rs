@@ -32,13 +32,13 @@ struct BridgeConfig {
 impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
-            udp_bind_address: "0.0.0.0:8081".to_string(),
-            echokit_websocket_url: "ws://localhost:9988/v1/realtime".to_string(),
-            api_gateway_websocket_url: "ws://localhost:8080/ws".to_string(),
+            udp_bind_address: "0.0.0.0:8083".to_string(),
+            echokit_websocket_url: "ws://echokit-server:9988/v1/realtime".to_string(),
+            api_gateway_websocket_url: "ws://api-gateway:8080/ws".to_string(),
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟
             heartbeat_interval_seconds: 30,
-            mqtt_broker_host: "localhost".to_string(),
+            mqtt_broker_host: "mqtt".to_string(),
             mqtt_broker_port: 1883,
         }
     }
