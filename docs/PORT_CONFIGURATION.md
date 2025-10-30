@@ -10,7 +10,7 @@
 
 | 服务名称 | 外部端口 | 内部端口 | 协议 | 说明 |
 |---------|----------|----------|------|------|
-| **EchoKit Server** | **10030** | 9988 | HTTP/WS | AI 推理服务 |
+| **EchoKit Server** | - | - | HTTP/WS | AI 推理服务 (外部 URL: ws://eu.echokit.dev) |
 | **Bridge WebSocket** | **10031** | 8082 | WebSocket | Bridge WebSocket 服务 |
 | **Bridge UDP** | **10032** | 8083 | UDP | Bridge UDP 通信 |
 | **API Gateway** | **10033** | 8080 | HTTP/WS | 主要 API 服务 |
@@ -28,7 +28,7 @@
 
 | 源服务 | 目标服务 | 连接地址 | 说明 |
 |--------|----------|----------|------|
-| Bridge | EchoKit Server | `ws://echokit-server:9988/v1/realtime` | WebSocket 连接 |
+| Bridge | EchoKit Server | `ws://eu.echokit.dev/ws` | 外部 WebSocket 连接 |
 | Bridge | PostgreSQL | `postgres:5432` | 数据库连接 |
 | Bridge | Redis | `redis:6379` | 缓存连接 |
 | API Gateway | Bridge | `ws://bridge:8082` | WebSocket 连接 |
@@ -37,10 +37,10 @@
 ## 配置文件修改记录
 
 ### 1. docker-compose.yml
+
 ```yaml
 # 主要修改的端口映射
 ports:
-  - "10030:9988"   # EchoKit Server
   - "10031:8082"   # Bridge WebSocket
   - "10032:8083"   # Bridge UDP
   - "10033:8080"   # API Gateway
@@ -56,18 +56,24 @@ ports:
 environment:
   REACT_APP_API_BASE_URL: http://localhost:10033
   REACT_APP_WS_URL: ws://localhost:10033
-  CORS_ORIGINS: "http://localhost:10034,http://localhost:3000"
+  CORS_ORIGINS: "http://localhost:5174,http://localhost:3000,http://localhost:10034"
+
+# Bridge 服务 EchoKit 配置
+environment:
+  ECHOKIT_WEBSOCKET_URL: ws://eu.echokit.dev/ws
+  ECHOKET_API_BASE_URL: https://eu.echokit.dev
 ```
 
 ### 2. .env.example
+
 ```bash
 # 数据库和缓存配置
 DATABASE_URL=postgres://echo_user:echo_password@localhost:10035/echo_db
 REDIS_URL=redis://:redis_password@localhost:10036
 
-# EchoKit Server 配置
-ECHOKIT_WEBSOCKET_URL=ws://localhost:10030/v1/realtime
-ECHOKET_API_BASE_URL=http://localhost:10030
+# EchoKit Server 配置 (外部服务)
+ECHOKIT_WEBSOCKET_URL=ws://eu.echokit.dev/ws
+ECHOKET_API_BASE_URL=https://eu.echokit.dev
 
 # MQTT 配置
 MQTT_BROKER_URL=tcp://localhost:10039
@@ -79,7 +85,6 @@ UDP_PORT=10032
 WEB_MANAGEMENT_PORT=10034
 POSTGRES_PORT=10035
 REDIS_PORT=10036
-ECHOKIT_SERVER_PORT=10030
 PGADMIN_PORT=10037
 REDIS_COMMANDER_PORT=10038
 MQTT_PORT=10039
@@ -92,6 +97,7 @@ CORS_ORIGINS=http://localhost:10034,http://localhost:3000
 ```
 
 ### 3. api-gateway/.env.example
+
 ```bash
 # 服务器配置
 APP_SERVER_PORT=8080  # 内部端口，保持不变
@@ -109,6 +115,7 @@ APP_MQTT_PORT=10039
 ## 使用指南
 
 ### 启动服务
+
 ```bash
 # 使用默认配置启动所有服务
 docker-compose up -d
@@ -125,9 +132,9 @@ docker-compose ps
 | Web Management | http://localhost:10034 | React 管理界面 |
 | pgAdmin | http://localhost:10037 | 数据库管理 |
 | Redis Commander | http://localhost:10038 | Redis 管理 |
-| EchoKit Server | http://localhost:10030 | AI 推理服务 |
 
 ### 环境变量配置
+
 ```bash
 # 复制环境变量模板
 cp .env.example .env
@@ -139,29 +146,19 @@ vim .env
 ## 重要说明
 
 ### 🔒 安全注意事项
+
 1. **生产环境**：建议修改默认密码和 JWT 密钥
-2. **防火墙**：确保端口 10030-10040 在防火墙中正确配置
+2. **防火墙**：确保端口 10031-10040 在防火墙中正确配置 (端口 10030 已停用)
 3. **网络隔离**：生产环境建议只暴露必要的端口
 
 ### 🔄 内部 vs 外部端口
+
 - **内部端口**：容器内服务监听的端口，保持不变
 - **外部端口**：主机上映射的端口，已修改为 10030+ 范围
 - **服务间通信**：使用 Docker 内部网络，通过服务名称和内部端口通信
 
 ### 🚀 端口范围规划
-- **10030-10034**：核心业务服务
+
+- **10031-10034**：核心业务服务 (EchoKit Server 改为外部服务)
 - **10035-10038**：数据和管理服务
 - **10039-10040**：消息队列服务
-
-### 🐛 故障排查
-```bash
-# 检查端口占用
-netstat -tulpn | grep 1003
-
-# 查看服务日志
-docker-compose logs <service-name>
-
-# 测试服务连通性
-curl http://localhost:10030/health
-curl http://localhost:10033/health
-```
