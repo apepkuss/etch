@@ -1,0 +1,41 @@
+services:
+  echokit-server:
+    image: secondstate/echokit:latest-server-vad
+    container_name: test-echokit-server
+    environment:
+      RUST_LOG: info
+      # 添加调试信息
+      ECHOKIT_DEBUG: "true"
+    volumes:
+      - ./tests/echokit-server/config.toml:/app/config.toml:ro
+      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
+      - ./echokit_recordings:/app/record
+      # 添加日志目录挂载
+      - ./logs:/app/logs
+    ports:
+      - "10030:8080"
+    networks:
+      - echokit-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # 添加资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+networks:
+  echokit-test-network:
+    driver: bridge
+
+volumes:
+  echokit_recordings:
+    driver: local

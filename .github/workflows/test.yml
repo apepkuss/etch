@@ -21,6 +21,268 @@ on:
 #   COMPOSE_DOCKER_CLI_BUILD: 1
 
 jobs:
+  # EchoKit Server 独立部署和测试
+  echokit-server-deploy:
+    name: EchoKit Server Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      echokit-ready: ${{ steps.test.outputs.success }}
+      echokit-logs: ${{ steps.logs.outputs.content }}
+      echokit-startup-time: ${{ steps.timing.outputs.duration }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          echo "=== 环境配置 ==="
+          cat .env | grep -E "(ECHOKIT|PORT)"
+
+          # 创建必要的目录
+          mkdir -p echokit_recordings logs
+
+      - name: Pull EchoKit Server image
+        run: |
+          echo "=== 拉取 Docker Hub 镜像 ==="
+          docker pull secondstate/echokit:latest-server-vad
+          docker images | grep echokit
+
+      - name: Verify EchoKit Server configuration
+        run: |
+          echo "=== 验证配置文件 ==="
+          ls -la tests/echokit-server/
+          echo "--- config.toml ---"
+          cat tests/echokit-server/config.toml
+          echo "--- docker-compose.echokit.yml ---"
+          cat tests/echokit-server/docker-compose.echokit.yml
+          echo "--- test-echokit.sh ---"
+          cat tests/echokit-server/test-echokit.sh
+
+      - name: Deploy EchoKit Server
+        id: timing
+        run: |
+          echo "=== 开始部署 EchoKit Server ==="
+          START_TIME=$(date +%s)
+
+          # 使用现有的测试配置文件
+          cd tests/echokit-server
+          docker-compose -f docker-compose.echokit.yml up -d
+
+          echo "=== 等待服务启动 ==="
+
+          # 等待健康检查通过或超时
+          MAX_WAIT=120  # 最多等待2分钟
+          WAIT_TIME=0
+
+          while [ $WAIT_TIME -lt $MAX_WAIT ]; do
+            if curl -f http://localhost:10030/health 2>/dev/null; then
+              echo "✅ 服务启动成功！"
+              break
+            fi
+            echo "⏳ 等待服务启动... (${WAIT_TIME}s/${MAX_WAIT}s)"
+            sleep 5
+            WAIT_TIME=$((WAIT_TIME + 5))
+          done
+
+          if [ $WAIT_TIME -ge $MAX_WAIT ]; then
+            echo "❌ 服务启动超时"
+            docker-compose -f docker-compose.echokit.yml logs echokit-server
+            exit 1
+          fi
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "🚀 启动耗时: ${DURATION}秒"
+
+      - name: Run comprehensive tests
+        id: test
+        run: |
+          echo "=== 运行综合测试 ==="
+
+          # 使用测试脚本
+          cd tests/echokit-server
+
+          if bash test-echokit.sh; then
+            echo "✅ 所有测试通过"
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 测试失败"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # 额外的详细测试
+          echo "=== 详细 API 测试 ==="
+
+          # 测试模型列表
+          echo "1. 模型列表测试:"
+          MODELS_RESPONSE=$(curl -s http://localhost:10030/v1/models)
+          if echo "$MODELS_RESPONSE" | jq -e '.data | length > 0'; then
+            echo "✅ 模型列表正常"
+          else
+            echo "❌ 模型列表为空或格式错误"
+          fi
+
+          # 测试容器状态
+          echo "2. 容器状态检查:"
+          if docker ps | grep test-echokit-server; then
+            echo "✅ 容器运行正常"
+          else
+            echo "❌ 容器未运行"
+          fi
+
+          # 测试资源使用
+          echo "3. 资源使用检查:"
+          MEMORY_USAGE=$(docker stats --no-stream test-echokit-server --format "{{.MemPerc}}")
+          CPU_USAGE=$(docker stats --no-stream test-echokit-server --format "{{.CPUPerc}}")
+          echo "📊 内存使用: $MEMORY_USAGE"
+          echo "📊 CPU使用: $CPU_USAGE"
+
+      - name: Collect comprehensive logs
+        id: logs
+        if: always()
+        run: |
+          echo "=== 收集详细的部署日志 ==="
+
+          cd tests/echokit-server
+
+          # 容器状态
+          echo "=== 📋 容器状态 ==="
+          docker-compose -f docker-compose.echokit.yml ps
+          echo ""
+
+          # 服务日志（按时间排序，最新的在前）
+          echo "=== 📋 服务日志 (最新200行) ==="
+          docker-compose -f docker-compose.echokit.yml logs --tail=200 --timestamps echokit-server
+          echo ""
+
+          # 健康检查历史
+          echo "=== 📋 健康检查历史 ==="
+          docker inspect test-echokit-server | jq -r '.[0].State.Health.Log[] | "\(.End) \(.ExitCode) \(.Output)"' | tail -10
+          echo ""
+
+          # 网络信息
+          echo "=== 📋 网络信息 ==="
+          docker network ls | grep echokit
+          docker network inspect echokit-test-network | jq '.[0].Containers | keys | length' | xargs echo "连接的容器数量:"
+          echo ""
+
+          # 挂载点检查
+          echo "=== 📋 挂载点检查 ==="
+          docker inspect test-echokit-server | jq '.[0].Mounts[] | {Source, Destination, RW}' || echo "无法获取挂载信息"
+          echo ""
+
+          # 环境变量（不包含敏感信息）
+          echo "=== 📋 环境变量 ==="
+          docker inspect test-echokit-server | jq '.[0].Config.Env[] | select(contains("PASSWORD") | not)' | head -10
+          echo ""
+
+          # 端口状态
+          echo "=== 📋 端口状态 ==="
+          netstat -tulpn | grep 10030 || echo "端口 10030 未监听"
+          echo ""
+
+          # 系统资源
+          echo "=== 📋 系统资源使用 ==="
+          docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" test-echokit-server
+
+          # 保存详细日志到输出
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "=== EchoKit Server 部署日志 ==="
+          echo "部署时间: $(date)"
+          echo "启动耗时: ${{ steps.timing.outputs.duration }}秒"
+          echo ""
+          echo "=== 服务日志 ==="
+          docker-compose -f docker-compose.echokit.yml logs --tail=200 echokit-server >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Performance benchmarks
+        if: steps.test.outputs.success == 'true'
+        run: |
+          echo "=== 性能基准测试 ==="
+
+          # API 响应时间测试
+          echo "1. API 响应时间测试:"
+          for i in {1..5}; do
+            RESPONSE_TIME=$(curl -o /dev/null -s -w '%{time_total}' http://localhost:10030/health)
+            echo "   请求 $i: ${RESPONSE_TIME}s"
+          done
+
+          # 并发连接测试（简单）
+          echo "2. 并发连接测试:"
+          for i in {1..3}; do
+            (curl -f http://localhost:10030/health &) &
+          done
+          wait
+          echo "   3个并发请求完成"
+
+          # VAD 性能测试（如果可用）
+          echo "3. VAD 性能测试:"
+          if curl -f http://localhost:10030/vad/health 2>/dev/null; then
+            echo "   VAD 服务响应正常"
+          else
+            echo "   VAD 服务未启用或不可用"
+          fi
+
+      - name: Cleanup EchoKit Server
+        if: always()
+        run: |
+          echo "=== 清理 EchoKit Server ==="
+          cd tests/echokit-server
+
+          # 保存日志到文件
+          docker-compose -f docker-compose.echokit.yml logs echokit-server > echokit-server-$(date +%Y%m%d-%H%M%S).log
+
+          # 停止并清理
+          docker-compose -f docker-compose.echokit.yml down -v --remove-orphans || true
+
+          # 清理镜像（可选）
+          docker rmi secondstate/echokit:latest-server-vad || true
+
+          # 清理测试目录
+          cd ../../
+          rm -rf echokit_recordings logs || true
+
+      - name: Upload EchoKit Server logs and artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: echokit-server-logs-${{ github.run_number }}
+          path: |
+            tests/echokit-server/docker-compose.echokit.yml
+            tests/echokit-server/config.toml
+            tests/echokit-server/test-echokit.sh
+            tests/echokit-server/*.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Generate deployment report
+        if: always()
+        run: |
+          echo "## 🚀 EchoKit Server 部署报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|----|" >> $GITHUB_STEP_SUMMARY
+          echo "| 镜像版本 | secondstate/echokit:latest-server-vad |" >> $GITHUB_STEP_SUMMARY
+          echo "| 启动耗时 | ${{ steps.timing.outputs.duration }}秒 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 部署状态 | ${{ steps.test.outputs.success == 'true' && '✅ 成功' || '❌ 失败' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 端口映射 | 10030:8080 |" >> $GITHUB_STEP_SUMMARY
+          echo "| VAD 服务 | ${{ contains(steps.logs.outputs.content, 'VAD') && '✅ 可用' || '❌ 未启用' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.test.outputs.success }}" == "true" ]; then
+            echo "### ✅ 测试通过项目" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] 容器启动" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] 健康检查" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] API 功能" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] 配置验证" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ 失败原因分析" >> $GITHUB_STEP_SUMMARY
+            echo "请检查上传的日志文件获取详细错误信息。" >> $GITHUB_STEP_SUMMARY
+          fi
+
   # # 基础代码检查
   # code-quality:
   #   name: Code Quality Checks
@@ -61,24 +323,19 @@ jobs:
   build:
     name: Build Services
     runs-on: ubuntu-latest
-    # needs: code-quality
+    needs: echokit-server-deploy
+    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true'
     outputs:
       images-built: ${{ steps.build.outputs.success }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Note: Removed Docker Buildx to resolve build context issues
-      # Using traditional Docker engine for better compatibility
-
       - name: Build Docker images
         id: build
         run: |
           # 创建环境文件
           cp .env.example .env
-
-          # 构建 EchoKit Server 下载
-          ./scripts/download-echokit-server.sh latest
 
           # 创建共享库临时副本
           echo "=== 创建共享库临时副本 ==="
@@ -90,7 +347,6 @@ jobs:
           ls -la api-gateway/src/ || echo "❌ api-gateway/src 不存在"
           ls -la bridge/src/ || echo "❌ bridge/src 不存在"
           ls -la shared/ || echo "❌ shared 不存在"
-          ls -la echokit-server-deployment/ || echo "❌ echokit-server-deployment 不存在"
           ls -la bridge/shared_temp/ || echo "❌ bridge/shared_temp 不存在"
           ls -la api-gateway/shared_temp/ || echo "❌ api-gateway/shared_temp 不存在"
 
@@ -98,17 +354,19 @@ jobs:
           echo "=== 清理 Docker 缓存 ==="
           docker system prune -f
 
-          # 构建所有服务镜像
-          echo "=== 开始构建 Docker 镜像 ==="
-          docker compose build --no-cache
+          # 构建其他服务镜像（排除 EchoKit Server）
+          echo "=== 开始构建 Docker 镜像（排除 EchoKit Server）==="
+          docker compose build --no-cache bridge api-gateway web-management postgres redis pgadmin redis-commander mqtt
           echo "success=true" >> $GITHUB_OUTPUT
+
+          echo "✅ 构建完成，EchoKit Server 将使用 Docker Hub 镜像"
 
   # 集成测试
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: build
-    if: needs.build.outputs.images-built == 'true'
+    needs: [echokit-server-deploy, build]
+    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true' && needs.build.outputs.images-built == 'true'
     strategy:
       matrix:
         test-suite: [
@@ -154,13 +412,15 @@ jobs:
           # 调整端口以避免冲突
           sed -i 's/9030:/9130:/g' .env
           sed -i 's/9031:/9131:/g' .env
+          sed -i 's/10030:/9129:/g' .env
           # 调整数据库端口以避免与本地进程冲突
           sed -i 's/5432:5432/5433:5432/g' .env
           sed -i 's/6379:6379/6380:6379/g' .env
 
-      - name: Download EchoKit Server
+      - name: Pull EchoKit Server image
         run: |
-          ./scripts/download-echokit-server.sh latest
+          echo "=== 拉取 EchoKit Server 镜像 ==="
+          docker pull secondstate/echokit:latest-server-vad
 
       - name: Start services
         run: |
@@ -173,9 +433,39 @@ jobs:
           echo "=== 等待端口释放 ==="
           sleep 10
 
-          # 设置超时时间并启动服务
-          echo "=== 启动服务 ==="
-          timeout 10m docker compose up -d
+          # 设置超时时间并启动服务（使用 Docker Hub 镜像的 EchoKit Server）
+          echo "=== 启动服务（EchoKit Server 使用 Docker Hub 镜像）==="
+
+          # 创建临时的 echokit-server 服务配置
+          cat > docker-compose.echokit-test.yml << 'EOF'
+version: '3.8'
+services:
+  echokit-server:
+    image: secondstate/echokit:latest-server-vad
+    container_name: test-echokit-server
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./tests/echokit-server/config.toml:/app/config.toml:ro
+      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
+      - ./echokit_recordings:/app/record
+    ports:
+      - "9129:8080"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+EOF
+
+          # 启动除 echokit-server 之外的服务
+          timeout 10m docker compose up -d postgres redis bridge api-gateway web-management
+
+          # 启动 EchoKit Server（使用 Docker Hub 镜像）
+          docker-compose -f docker-compose.echokit-test.yml up -d echokit-server
 
       - name: Debug services on failure
         if: failure()
@@ -194,7 +484,7 @@ jobs:
           docker network ls
           echo ""
           echo "=== 端口占用情况 ==="
-          netstat -tulpn | grep -E "(5433|6380|8080|8082|8083|9988)" || echo "未检测到相关端口占用"
+          netstat -tulpn | grep -E "(5433|6380|8080|8082|8083|9129)" || echo "未检测到相关端口占用"
           echo ""
           echo "=== Docker 系统信息 ==="
           docker system df
@@ -205,14 +495,25 @@ jobs:
       - name: Wait for services to be ready
         run: |
           echo "等待服务启动..."
+
+          # 等待 API Gateway
           for i in {1..60}; do
             if curl -f http://localhost:9131/health >/dev/null 2>&1; then
-              echo "服务已就绪"
+              echo "✅ API Gateway 已就绪"
               break
             fi
-            echo "等待中... ($i/60)"
+            echo "⏳ 等待 API Gateway... ($i/60)"
             sleep 10
           done
+
+          # 检查 EchoKit Server
+          if curl -f http://localhost:9129/health >/dev/null 2>&1; then
+            echo "✅ EchoKit Server 已就绪"
+          else
+            echo "❌ EchoKit Server 未就绪"
+            docker-compose -f docker-compose.echokit-test.yml logs echokit-server --tail=50
+            exit 1
+          fi
 
       - name: Show service status
         run: |
@@ -249,15 +550,17 @@ jobs:
         run: |
           echo "=== 清理测试资源 ==="
           docker compose down -v --remove-orphans || true
+          docker-compose -f docker-compose.echokit-test.yml down -v --remove-orphans || true
           docker system prune -f || true
+          rm -f docker-compose.echokit-test.yml || true
           echo "=== 清理完成 ==="
 
   # 端到端测试
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
-    needs: integration-tests
-    if: success()
+    needs: [echokit-server-deploy, build, integration-tests]
+    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true' && needs.integration-tests.result == 'success'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -276,6 +579,7 @@ jobs:
           # 调整数据库端口以避免与本地进程冲突
           sed -i 's/5432:5432/5434:5432/g' .env
           sed -i 's/6379:6379/6381:6379/g' .env
+          sed -i 's/10030:/9230:/g' .env
 
           # 清理可能存在的容器和端口占用
           echo "=== 清理现有容器 ==="
@@ -286,8 +590,39 @@ jobs:
           echo "=== 等待端口释放 ==="
           sleep 10
 
-          # 下载 EchoKit Server
-          ./scripts/download-echokit-server.sh latest
+          # 拉取 EchoKit Server 镜像
+          echo "=== 拉取 EchoKit Server 镜像 ==="
+          docker pull secondstate/echokit:latest-server-vad
+
+          # 创建 EchoKit Server 配置
+          cat > docker-compose.echokit-e2e.yml << 'EOF'
+version: '3.8'
+services:
+  echokit-server:
+    image: secondstate/echokit:latest-server-vad
+    container_name: e2e-echokit-server
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./tests/echokit-server/config.toml:/app/config.toml:ro
+      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
+      - ./echokit_recordings:/app/record
+    ports:
+      - "9230:8080"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+EOF
+
+          # 启动所有服务（包括 EchoKit Server）
+          echo "=== 启动完整服务套件 ==="
+          docker compose up -d
+          docker-compose -f docker-compose.echokit-e2e.yml up -d echokit-server
 
           # 运行完整测试套件
           timeout 20m ./tests/integration/run_all_tests.sh \
@@ -336,27 +671,29 @@ jobs:
         run: |
           echo "=== 清理测试资源 ==="
           docker compose down -v --remove-orphans || true
+          docker-compose -f docker-compose.echokit-e2e.yml down -v --remove-orphans || true
           docker system prune -f || true
+          rm -f .env integration-test-report-*.txt docker-compose.echokit-e2e.yml || true
           echo "=== 清理完成 ==="
-          rm -f .env integration-test-report-*.txt || true
 
   # 部署状态检查
   deployment-check:
     name: Deployment Health Check
     runs-on: ubuntu-latest
-    needs: [integration-tests, e2e-tests]
-    if: always() && (needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
+    needs: [echokit-server-deploy, integration-tests, e2e-tests]
+    if: always() && (needs.echokit-server-deploy.result == 'success' && needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
     steps:
       - name: Create deployment status
         run: |
           echo "✅ 所有集成测试通过"
           echo "📊 测试统计:"
-          echo "  - 代码质量检查: 通过"
-          echo "  - 构建测试: 通过"
-          echo "  - 集成测试: 通过"
-          echo "  - 端到端测试: 通过"
+          echo "  - EchoKit Server 部署: ✅ 通过 (启动时间: ${{ needs.echokit-server-deploy.outputs.echokit-startup-time }}秒)"
+          echo "  - 构建测试: ✅ 通过"
+          echo "  - 集成测试: ✅ 通过"
+          echo "  - 端到端测试: ✅ 通过"
           echo ""
           echo "🚀 Echo System 准备就绪，可以部署！"
+          echo "📝 EchoKit Server 已切换为 Docker Hub 镜像: secondstate/echokit:latest-server-vad"
 
   # 清理工作流
   cleanup:
