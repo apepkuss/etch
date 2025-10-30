@@ -125,6 +125,8 @@ jobs:
           sed -i 's/10035:/15432:/g' .env  # PostgreSQL
           sed -i 's/10036:/16379:/g' .env  # Redis
           sed -i 's/10033:/18080:/g' .env  # API Gateway
+          # 修改 docker-compose.yml 中的端口映射以避免冲突
+          sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
 
       - name: Build and Deploy API Gateway
         id: deploy
@@ -180,6 +182,10 @@ jobs:
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10031:/18082:/g' .env  # Bridge WebSocket
           sed -i 's/10032:/18083:/g' .env  # Bridge UDP
+          # 修改 docker-compose.yml 中的端口映射以避免冲突
+          sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
+          sed -i 's/- "10031:8082"/- "18082:8082"/g' docker-compose.yml
+          sed -i 's/- "10032:8083"/- "18083:8083"/g' docker-compose.yml
 
       - name: Build and Deploy Bridge
         id: deploy
@@ -236,6 +242,8 @@ jobs:
           # 更新前端配置
           sed -i 's/http:\/\/localhost:10033/http:\/\/localhost:18080/g' .env
           sed -i 's/ws:\/\/localhost:10033/ws:\/\/localhost:18080/g' .env
+          # 修改 docker-compose.yml 中的端口映射以避免冲突
+          sed -i 's/- "10034:5174"/- "18084:5174"/g' docker-compose.yml
 
       - name: Build and Deploy Web Management
         id: deploy
@@ -337,6 +345,9 @@ jobs:
           # 设置测试端口配置
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10034:/18084:/g' .env  # Web Management
+          # 修改 docker-compose.yml 中的端口映射以避免冲突
+          sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
+          sed -i 's/- "10034:5174"/- "18084:5174"/g' docker-compose.yml
 
       - name: Wait for all services
         run: |
@@ -443,6 +454,9 @@ jobs:
           # 设置完整的端口配置
           sed -i 's/10033:/18080:/g' .env  # API Gateway
           sed -i 's/10034:/18084:/g' .env  # Web Management
+          # 修改 docker-compose.yml 中的端口映射以避免冲突
+          sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
+          sed -i 's/- "10034:5174"/- "18084:5174"/g' docker-compose.yml
 
       - name: Verify all services
         run: |
