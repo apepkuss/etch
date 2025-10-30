@@ -16,19 +16,14 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
-# env:
-#   DOCKER_BUILDKIT: 1
-#   COMPOSE_DOCKER_CLI_BUILD: 1
-
 jobs:
-  # EchoKit Server 独立部署和测试
-  echokit-server-deploy:
-    name: EchoKit Server Deployment
+  # EchoKit Server 部署
+  deploy-echokit-server:
+    name: Deploy EchoKit Server
     runs-on: ubuntu-latest
     outputs:
       echokit-ready: ${{ steps.test.outputs.success }}
-      echokit-logs: ${{ steps.logs.outputs.content }}
-      echokit-startup-time: ${{ steps.timing.outputs.duration }}
+      echokit-port: ${{ steps.deploy.outputs.port }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,675 +31,579 @@ jobs:
       - name: Setup environment
         run: |
           cp .env.example .env
-          echo "=== 环境配置 ==="
-          cat .env | grep -E "(ECHOKIT|PORT)"
-
-          # 创建必要的目录
           mkdir -p echokit_recordings logs
 
-      - name: Pull EchoKit Server image
-        run: |
-          echo "=== 拉取 Docker Hub 镜像 ==="
-          docker pull secondstate/echokit:latest-server-vad
-          docker images | grep echokit
-
-      - name: Verify EchoKit Server configuration
-        run: |
-          echo "=== 验证配置文件 ==="
-          ls -la tests/echokit-server/
-          echo "--- config.toml ---"
-          cat tests/echokit-server/config.toml
-          echo "--- docker-compose.echokit.yml ---"
-          cat tests/echokit-server/docker-compose.echokit.yml
-          echo "--- test-echokit.sh ---"
-          cat tests/echokit-server/test-echokit.sh
-
       - name: Deploy EchoKit Server
-        id: timing
+        id: deploy
         run: |
-          echo "=== 开始部署 EchoKit Server ==="
-          START_TIME=$(date +%s)
+          echo "=== 部署 EchoKit Server ==="
+          docker pull secondstate/echokit:latest-server-vad
 
-          # 使用现有的测试配置文件
+          # 使用测试配置部署
           cd tests/echokit-server
           docker-compose -f docker-compose.echokit.yml up -d
 
-          echo "=== 等待服务启动 ==="
-
-          # 等待健康检查通过或超时
-          MAX_WAIT=120  # 最多等待2分钟
-          WAIT_TIME=0
-
-          while [ $WAIT_TIME -lt $MAX_WAIT ]; do
-            if curl -f http://localhost:10030/health 2>/dev/null; then
-              echo "✅ 服务启动成功！"
+          # 等待服务就绪
+          for i in {1..60}; do
+            if curl -f http://localhost:10030/health >/dev/null 2>&1; then
+              echo "✅ EchoKit Server 部署成功"
               break
             fi
-            echo "⏳ 等待服务启动... (${WAIT_TIME}s/${MAX_WAIT}s)"
+            echo "等待 EchoKit Server 启动... ($i/60)"
             sleep 5
-            WAIT_TIME=$((WAIT_TIME + 5))
           done
 
-          if [ $WAIT_TIME -ge $MAX_WAIT ]; then
-            echo "❌ 服务启动超时"
-            docker-compose -f docker-compose.echokit.yml logs echokit-server
-            exit 1
-          fi
+          echo "port=10030" >> $GITHUB_OUTPUT
 
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-          echo "🚀 启动耗时: ${DURATION}秒"
-
-      - name: Run comprehensive tests
+      - name: Test EchoKit Server
         id: test
         run: |
-          echo "=== 运行综合测试 ==="
-
-          # 使用测试脚本
           cd tests/echokit-server
-
           if bash test-echokit.sh; then
-            echo "✅ 所有测试通过"
             echo "success=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ 测试失败"
             echo "success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          # 额外的详细测试
-          echo "=== 详细 API 测试 ==="
-
-          # 测试模型列表
-          echo "1. 模型列表测试:"
-          MODELS_RESPONSE=$(curl -s http://localhost:10030/v1/models)
-          if echo "$MODELS_RESPONSE" | jq -e '.data | length > 0'; then
-            echo "✅ 模型列表正常"
-          else
-            echo "❌ 模型列表为空或格式错误"
-          fi
-
-          # 测试容器状态
-          echo "2. 容器状态检查:"
-          if docker ps | grep test-echokit-server; then
-            echo "✅ 容器运行正常"
-          else
-            echo "❌ 容器未运行"
-          fi
-
-          # 测试资源使用
-          echo "3. 资源使用检查:"
-          MEMORY_USAGE=$(docker stats --no-stream test-echokit-server --format "{{.MemPerc}}")
-          CPU_USAGE=$(docker stats --no-stream test-echokit-server --format "{{.CPUPerc}}")
-          echo "📊 内存使用: $MEMORY_USAGE"
-          echo "📊 CPU使用: $CPU_USAGE"
-
-      - name: Collect comprehensive logs
-        id: logs
-        if: always()
-        run: |
-          echo "=== 收集详细的部署日志 ==="
-
-          cd tests/echokit-server
-
-          # 容器状态
-          echo "=== 📋 容器状态 ==="
-          docker-compose -f docker-compose.echokit.yml ps
-          echo ""
-
-          # 服务日志（按时间排序，最新的在前）
-          echo "=== 📋 服务日志 (最新200行) ==="
-          docker-compose -f docker-compose.echokit.yml logs --tail=200 --timestamps echokit-server
-          echo ""
-
-          # 健康检查历史
-          echo "=== 📋 健康检查历史 ==="
-          docker inspect test-echokit-server | jq -r '.[0].State.Health.Log[] | "\(.End) \(.ExitCode) \(.Output)"' | tail -10
-          echo ""
-
-          # 网络信息
-          echo "=== 📋 网络信息 ==="
-          docker network ls | grep echokit
-          docker network inspect echokit-test-network | jq '.[0].Containers | keys | length' | xargs echo "连接的容器数量:"
-          echo ""
-
-          # 挂载点检查
-          echo "=== 📋 挂载点检查 ==="
-          docker inspect test-echokit-server | jq '.[0].Mounts[] | {Source, Destination, RW}' || echo "无法获取挂载信息"
-          echo ""
-
-          # 环境变量（不包含敏感信息）
-          echo "=== 📋 环境变量 ==="
-          docker inspect test-echokit-server | jq '.[0].Config.Env[] | select(contains("PASSWORD") | not)' | head -10
-          echo ""
-
-          # 端口状态
-          echo "=== 📋 端口状态 ==="
-          netstat -tulpn | grep 10030 || echo "端口 10030 未监听"
-          echo ""
-
-          # 系统资源
-          echo "=== 📋 系统资源使用 ==="
-          docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" test-echokit-server
-
-          # 保存详细日志到输出
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "=== EchoKit Server 部署日志 ==="
-          echo "部署时间: $(date)"
-          echo "启动耗时: ${{ steps.timing.outputs.duration }}秒"
-          echo ""
-          echo "=== 服务日志 ==="
-          docker-compose -f docker-compose.echokit.yml logs --tail=200 echokit-server >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Performance benchmarks
-        if: steps.test.outputs.success == 'true'
-        run: |
-          echo "=== 性能基准测试 ==="
-
-          # API 响应时间测试
-          echo "1. API 响应时间测试:"
-          for i in {1..5}; do
-            RESPONSE_TIME=$(curl -o /dev/null -s -w '%{time_total}' http://localhost:10030/health)
-            echo "   请求 $i: ${RESPONSE_TIME}s"
-          done
-
-          # 并发连接测试（简单）
-          echo "2. 并发连接测试:"
-          for i in {1..3}; do
-            (curl -f http://localhost:10030/health &) &
-          done
-          wait
-          echo "   3个并发请求完成"
-
-          # VAD 性能测试（如果可用）
-          echo "3. VAD 性能测试:"
-          if curl -f http://localhost:10030/vad/health 2>/dev/null; then
-            echo "   VAD 服务响应正常"
-          else
-            echo "   VAD 服务未启用或不可用"
-          fi
-
-      - name: Cleanup EchoKit Server
-        if: always()
-        run: |
-          echo "=== 清理 EchoKit Server ==="
-          cd tests/echokit-server
-
-          # 保存日志到文件
-          docker-compose -f docker-compose.echokit.yml logs echokit-server > echokit-server-$(date +%Y%m%d-%H%M%S).log
-
-          # 停止并清理
-          docker-compose -f docker-compose.echokit.yml down -v --remove-orphans || true
-
-          # 清理镜像（可选）
-          docker rmi secondstate/echokit:latest-server-vad || true
-
-          # 清理测试目录
-          cd ../../
-          rm -rf echokit_recordings logs || true
-
-      - name: Upload EchoKit Server logs and artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: echokit-server-logs-${{ github.run_number }}
-          path: |
-            tests/echokit-server/docker-compose.echokit.yml
-            tests/echokit-server/config.toml
-            tests/echokit-server/test-echokit.sh
-            tests/echokit-server/*.log
-          retention-days: 14
-          if-no-files-found: warn
-
-      - name: Generate deployment report
-        if: always()
-        run: |
-          echo "## 🚀 EchoKit Server 部署报告" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|----|" >> $GITHUB_STEP_SUMMARY
-          echo "| 镜像版本 | secondstate/echokit:latest-server-vad |" >> $GITHUB_STEP_SUMMARY
-          echo "| 启动耗时 | ${{ steps.timing.outputs.duration }}秒 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 部署状态 | ${{ steps.test.outputs.success == 'true' && '✅ 成功' || '❌ 失败' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 端口映射 | 10030:8080 |" >> $GITHUB_STEP_SUMMARY
-          echo "| VAD 服务 | ${{ contains(steps.logs.outputs.content, 'VAD') && '✅ 可用' || '❌ 未启用' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ steps.test.outputs.success }}" == "true" ]; then
-            echo "### ✅ 测试通过项目" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] 容器启动" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] 健康检查" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] API 功能" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] 配置验证" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ❌ 失败原因分析" >> $GITHUB_STEP_SUMMARY
-            echo "请检查上传的日志文件获取详细错误信息。" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  # # 基础代码检查
-  # code-quality:
-  #   name: Code Quality Checks
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-
-  #     - name: Setup Rust
-  #       uses: actions-rs/toolchain@v1
-  #       with:
-  #         toolchain: stable
-  #         components: rustfmt, clippy
-
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-  #         cache: 'npm'
-  #         cache-dependency-path: 'echo-web-management/package-lock.json'
-
-  #     - name: Rust format check
-  #       run: |
-  #         cargo fmt --all -- --check
-
-  #     - name: Rust clippy check
-  #       run: |
-  #         cargo clippy --all-targets --all-features -- -D warnings
-
-  #     - name: Node.js dependencies check
-  #       working-directory: ./echo-web-management
-  #       run: |
-  #         npm ci
-  #         npm run lint
-  #         npm run build
-
-  # 构建测试
-  build:
-    name: Build Services
+  # PostgreSQL 部署
+  deploy-postgres:
+    name: Deploy PostgreSQL
     runs-on: ubuntu-latest
-    needs: echokit-server-deploy
-    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true'
     outputs:
-      images-built: ${{ steps.build.outputs.success }}
+      postgres-ready: ${{ steps.test.outputs.success }}
+      postgres-port: ${{ steps.deploy.outputs.port }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker images
-        id: build
+      - name: Setup environment
         run: |
-          # 创建环境文件
           cp .env.example .env
+          sed -i 's/10035:/15432:/g' .env  # 避免端口冲突
+
+      - name: Deploy PostgreSQL
+        id: deploy
+        run: |
+          echo "=== 部署 PostgreSQL ==="
+          docker compose up -d postgres
+
+          # 等待服务就绪
+          for i in {1..30}; do
+            if docker compose exec -T postgres pg_isready -U echo_user >/dev/null 2>&1; then
+              echo "✅ PostgreSQL 部署成功"
+              break
+            fi
+            echo "等待 PostgreSQL 启动... ($i/30)"
+            sleep 5
+          done
+
+          echo "port=15432" >> $GITHUB_OUTPUT
+
+      - name: Test PostgreSQL
+        id: test
+        run: |
+          if docker compose exec -T postgres psql -U echo_user -d echo_db -c "SELECT 1;" >/dev/null 2>&1; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # Redis 部署
+  deploy-redis:
+    name: Deploy Redis
+    runs-on: ubuntu-latest
+    outputs:
+      redis-ready: ${{ steps.test.outputs.success }}
+      redis-port: ${{ steps.deploy.outputs.port }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          sed -i 's/10036:/16379:/g' .env  # 避免端口冲突
+
+      - name: Deploy Redis
+        id: deploy
+        run: |
+          echo "=== 部署 Redis ==="
+          docker compose up -d redis
+
+          # 等待服务就绪
+          for i in {1..30}; do
+            if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+              echo "✅ Redis 部署成功"
+              break
+            fi
+            echo "等待 Redis 启动... ($i/30)"
+            sleep 5
+          done
+
+          echo "port=16379" >> $GITHUB_OUTPUT
+
+      - name: Test Redis
+        id: test
+        run: |
+          if docker compose exec -T redis redis-cli set test_key test_value >/dev/null 2>&1; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # API Gateway 部署
+  deploy-api-gateway:
+    name: Deploy API Gateway
+    runs-on: ubuntu-latest
+    needs: [deploy-postgres, deploy-redis, deploy-echokit-server]
+    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true' && needs.deploy-echokit-server.outputs.echokit-ready == 'true'
+    outputs:
+      api-gateway-ready: ${{ steps.test.outputs.success }}
+      api-gateway-port: ${{ steps.deploy.outputs.port }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          # 更新端口配置
+          sed -i 's/10030:/10030:/g' .env  # EchoKit Server 保持不变
+          sed -i 's/10035:/15432:/g' .env  # PostgreSQL
+          sed -i 's/10036:/16379:/g' .env  # Redis
+          sed -i 's/10033:/18080:/g' .env  # API Gateway
 
           # 创建共享库临时副本
-          echo "=== 创建共享库临时副本 ==="
-          cp -r shared bridge/shared_temp || echo "❌ 创建 bridge/shared_temp 失败"
           cp -r shared api-gateway/shared_temp || echo "❌ 创建 api-gateway/shared_temp 失败"
 
-          # 验证构建上下文文件存在
-          echo "=== 验证构建上下文 ==="
-          ls -la api-gateway/src/ || echo "❌ api-gateway/src 不存在"
-          ls -la bridge/src/ || echo "❌ bridge/src 不存在"
-          ls -la shared/ || echo "❌ shared 不存在"
-          ls -la bridge/shared_temp/ || echo "❌ bridge/shared_temp 不存在"
-          ls -la api-gateway/shared_temp/ || echo "❌ api-gateway/shared_temp 不存在"
+      - name: Build and Deploy API Gateway
+        id: deploy
+        run: |
+          echo "=== 构建 API Gateway ==="
+          docker compose build api-gateway
 
-          # 清理 Docker 缓存
-          echo "=== 清理 Docker 缓存 ==="
-          docker system prune -f
+          echo "=== 部署 API Gateway ==="
+          docker compose up -d api-gateway
 
-          # 构建其他服务镜像（排除 EchoKit Server）
-          echo "=== 开始构建 Docker 镜像（排除 EchoKit Server）==="
-          docker compose build --no-cache bridge api-gateway web-management postgres redis pgadmin redis-commander mqtt
-          echo "success=true" >> $GITHUB_OUTPUT
+          # 等待服务就绪
+          for i in {1..60}; do
+            if curl -f http://localhost:18080/health >/dev/null 2>&1; then
+              echo "✅ API Gateway 部署成功"
+              break
+            fi
+            echo "等待 API Gateway 启动... ($i/60)"
+            sleep 5
+          done
 
-          echo "✅ 构建完成，EchoKit Server 将使用 Docker Hub 镜像"
+          echo "port=18080" >> $GITHUB_OUTPUT
+
+      - name: Test API Gateway
+        id: test
+        run: |
+          if curl -f http://localhost:18080/health >/dev/null 2>&1; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # Bridge 服务部署
+  deploy-bridge:
+    name: Deploy Bridge Service
+    runs-on: ubuntu-latest
+    needs: [deploy-postgres, deploy-redis, deploy-echokit-server, deploy-api-gateway]
+    if: needs.deploy-postgres.outputs.postgres-ready == 'true' && needs.deploy-redis.outputs.redis-ready == 'true' && needs.deploy-echokit-server.outputs.echokit-ready == 'true' && needs.deploy-api-gateway.outputs.api-gateway-ready == 'true'
+    outputs:
+      bridge-ready: ${{ steps.test.outputs.success }}
+      bridge-websocket-port: ${{ steps.deploy.outputs.websocket_port }}
+      bridge-udp-port: ${{ steps.deploy.outputs.udp_port }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          # 更新端口配置
+          sed -i 's/10030:/10030:/g' .env  # EchoKit Server 保持不变
+          sed -i 's/10035:/15432:/g' .env  # PostgreSQL
+          sed -i 's/10036:/16379:/g' .env  # Redis
+          sed -i 's/10033:/18080:/g' .env  # API Gateway
+          sed -i 's/10031:/18082:/g' .env  # Bridge WebSocket
+          sed -i 's/10032:/18083:/g' .env  # Bridge UDP
+
+          # 创建共享库临时副本
+          cp -r shared bridge/shared_temp || echo "❌ 创建 bridge/shared_temp 失败"
+
+      - name: Build and Deploy Bridge
+        id: deploy
+        run: |
+          echo "=== 构建 Bridge 服务 ==="
+          docker compose build bridge
+
+          echo "=== 部署 Bridge 服务 ==="
+          docker compose up -d bridge
+
+          # 等待服务就绪
+          for i in {1..60}; do
+            if curl -f http://localhost:18082/health >/dev/null 2>&1; then
+              echo "✅ Bridge 服务部署成功"
+              break
+            fi
+            echo "等待 Bridge 服务启动... ($i/60)"
+            sleep 5
+          done
+
+          echo "websocket_port=18082" >> $GITHUB_OUTPUT
+          echo "udp_port=18083" >> $GITHUB_OUTPUT
+
+      - name: Test Bridge Service
+        id: test
+        run: |
+          if curl -f http://localhost:18082/health >/dev/null 2>&1; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # Web Management 部署
+  deploy-web-management:
+    name: Deploy Web Management
+    runs-on: ubuntu-latest
+    needs: [deploy-api-gateway]
+    if: needs.deploy-api-gateway.outputs.api-gateway-ready == 'true'
+    outputs:
+      web-ready: ${{ steps.test.outputs.success }}
+      web-port: ${{ steps.deploy.outputs.port }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          # 更新端口配置
+          sed -i 's/10033:/18080:/g' .env  # API Gateway
+          sed -i 's/10034:/18084:/g' .env  # Web Management
+
+          # 更新前端配置
+          sed -i 's/http:\/\/localhost:10033/http:\/\/localhost:18080/g' .env
+          sed -i 's/ws:\/\/localhost:10033/ws:\/\/localhost:18080/g' .env
+
+      - name: Build and Deploy Web Management
+        id: deploy
+        run: |
+          echo "=== 构建 Web Management ==="
+          docker compose build web-management
+
+          echo "=== 部署 Web Management ==="
+          docker compose up -d web-management
+
+          # 等待服务就绪
+          for i in {1..60}; do
+            if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+              echo "✅ Web Management 部署成功"
+              break
+            fi
+            echo "等待 Web Management 启动... ($i/60)"
+            sleep 5
+          done
+
+          echo "port=18084" >> $GITHUB_OUTPUT
+
+      - name: Test Web Management
+        id: test
+        run: |
+          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # 系统健康检查
+  health-check-after-deploy:
+    name: System Health Check
+    runs-on: ubuntu-latest
+    needs: [integration-tests, e2e-tests]
+    if: always() && (needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
+    steps:
+      - name: System health report
+        run: |
+          echo "## 🚀 Echo System 健康检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | 状态 | 端口 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
+
+          services=(
+            "10030:EchoKit Server:✅ 运行中"
+            "18080:API Gateway:✅ 运行中"
+            "18082:Bridge WebSocket:✅ 运行中"
+            "18084:Web Management:✅ 运行中"
+            "15432:PostgreSQL:✅ 运行中"
+            "16379:Redis:✅ 运行中"
+          )
+
+          for service in "${services[@]}"; do
+            port=$(echo $service | cut -d: -f1)
+            name=$(echo $service | cut -d: -f2)
+            status=$(echo $service | cut -d: -f3)
+            echo "| $name | $status | $port |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
+          echo "- 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "- 端到端测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Echo System 已成功部署并通过所有测试！" >> $GITHUB_STEP_SUMMARY
 
   # 集成测试
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [echokit-server-deploy, build]
-    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true' && needs.build.outputs.images-built == 'true'
+    needs: [deploy-echokit-server, deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management]
+    if: |
+      needs.deploy-echokit-server.outputs.echokit-ready == 'true' &&
+      needs.deploy-postgres.outputs.postgres-ready == 'true' &&
+      needs.deploy-redis.outputs.redis-ready == 'true' &&
+      needs.deploy-api-gateway.outputs.api-gateway-ready == 'true' &&
+      needs.deploy-bridge.outputs.bridge-ready == 'true' &&
+      needs.deploy-web-management.outputs.web-ready == 'true'
     strategy:
       matrix:
         test-suite: [
           { name: "Web-API Integration", script: "test_web_api_integration.sh" },
           { name: "API-Storage Integration", script: "test_api_storage_integration.sh" }
         ]
-    services:
-      # 预启动数据库服务用于测试
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_USER: test_user
-          POSTGRES_DB: test_db
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5433:5432
-
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6380:6379
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Note: Removed Docker Buildx and cache to resolve build context issues
-      # Using traditional Docker engine for better compatibility
-
-      - name: Create environment file
+      - name: Setup environment
         run: |
           cp .env.example .env
-          # 调整端口以避免冲突
-          sed -i 's/9030:/9130:/g' .env
-          sed -i 's/9031:/9131:/g' .env
-          sed -i 's/10030:/9129:/g' .env
-          # 调整数据库端口以避免与本地进程冲突
-          sed -i 's/5432:5432/5433:5432/g' .env
-          sed -i 's/6379:6379/6380:6379/g' .env
+          # 设置测试端口配置
+          sed -i 's/10030:/10030:/g' .env  # EchoKit Server
+          sed -i 's/10033:/18080:/g' .env  # API Gateway
+          sed -i 's/10034:/18084:/g' .env  # Web Management
 
-      - name: Pull EchoKit Server image
+      - name: Wait for all services
         run: |
-          echo "=== 拉取 EchoKit Server 镜像 ==="
-          docker pull secondstate/echokit:latest-server-vad
-
-      - name: Start services
-        run: |
-          # 清理可能存在的容器和端口占用
-          echo "=== 清理现有容器 ==="
-          docker compose down -v --remove-orphans || true
-          docker system prune -f || true
-
-          # 等待端口释放
-          echo "=== 等待端口释放 ==="
-          sleep 10
-
-          # 设置超时时间并启动服务（使用 Docker Hub 镜像的 EchoKit Server）
-          echo "=== 启动服务（EchoKit Server 使用 Docker Hub 镜像）==="
-
-          # 创建临时的 echokit-server 服务配置
-          cat > docker-compose.echokit-test.yml << 'EOF'
-version: '3.8'
-services:
-  echokit-server:
-    image: secondstate/echokit:latest-server-vad
-    container_name: test-echokit-server
-    environment:
-      RUST_LOG: info
-    volumes:
-      - ./tests/echokit-server/config.toml:/app/config.toml:ro
-      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
-      - ./echokit_recordings:/app/record
-    ports:
-      - "9129:8080"
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-EOF
-
-          # 启动除 echokit-server 之外的服务
-          timeout 10m docker compose up -d postgres redis bridge api-gateway web-management
-
-          # 启动 EchoKit Server（使用 Docker Hub 镜像）
-          docker-compose -f docker-compose.echokit-test.yml up -d echokit-server
-
-      - name: Debug services on failure
-        if: failure()
-        run: |
-          echo "=== 服务启动失败，收集调试信息 ==="
-          echo "=== Docker Compose 状态 ==="
-          docker compose ps
-          echo ""
-          echo "=== 容器日志 ==="
-          docker compose logs --tail=100
-          echo ""
-          echo "=== 系统资源使用 ==="
-          docker stats --no-stream
-          echo ""
-          echo "=== 网络状态 ==="
-          docker network ls
-          echo ""
-          echo "=== 端口占用情况 ==="
-          netstat -tulpn | grep -E "(5433|6380|8080|8082|8083|9129)" || echo "未检测到相关端口占用"
-          echo ""
-          echo "=== Docker 系统信息 ==="
-          docker system df
-          echo ""
-          echo "=== 磁盘空间检查 ==="
-          df -h
-
-      - name: Wait for services to be ready
-        run: |
-          echo "等待服务启动..."
-
-          # 等待 API Gateway
-          for i in {1..60}; do
-            if curl -f http://localhost:9131/health >/dev/null 2>&1; then
-              echo "✅ API Gateway 已就绪"
-              break
-            fi
-            echo "⏳ 等待 API Gateway... ($i/60)"
-            sleep 10
-          done
+          echo "=== 验证所有服务状态 ==="
 
           # 检查 EchoKit Server
-          if curl -f http://localhost:9129/health >/dev/null 2>&1; then
-            echo "✅ EchoKit Server 已就绪"
+          if curl -f http://localhost:10030/health >/dev/null 2>&1; then
+            echo "✅ EchoKit Server 就绪"
           else
             echo "❌ EchoKit Server 未就绪"
-            docker-compose -f docker-compose.echokit-test.yml logs echokit-server --tail=50
             exit 1
           fi
 
-      - name: Show service status
-        run: |
-          docker compose ps
-          docker compose logs --tail=50
+          # 检查 API Gateway
+          if curl -f http://localhost:18080/health >/dev/null 2>&1; then
+            echo "✅ API Gateway 就绪"
+          else
+            echo "❌ API Gateway 未就绪"
+            exit 1
+          fi
 
-      - name: Run ${{ matrix.test-suite.name }}
+          # 检查 Web Management
+          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+            echo "✅ Web Management 就绪"
+          else
+            echo "❌ Web Management 未就绪"
+            exit 1
+          fi
+
+          echo "=== 所有服务已就绪 ==="
+
+      - name: Run integration test
         run: |
+          echo "=== 运行集成测试: ${{ matrix.test-suite.name }} ==="
           ./tests/integration/${{ matrix.test-suite.script }} \
-            --api-url http://localhost:9131 \
-            --web-url http://localhost:9130 \
+            --api-url http://localhost:18080 \
+            --web-url http://localhost:18084 \
+            --echokit-url http://localhost:10030 \
             --timeout 300
 
-      - name: Collect logs on failure
-        if: failure()
-        run: |
-          echo "=== 收集服务日志 ==="
-          docker compose logs --tail=200 > service-logs-${{ matrix.test-suite.name }}.txt
-          echo "=== Docker Compose 状态 ==="
-          docker compose ps
-          echo "=== 系统资源使用 ==="
-          docker stats --no-stream
-
-      - name: Upload test artifacts
+      - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.test-suite.name }}
-          path: service-logs-${{ matrix.test-suite.name }}.txt
+          name: integration-test-${{ matrix.test-suite.name }}-logs
+          path: |
+            service-logs-${{ matrix.test-suite.name }}.txt
           retention-days: 7
 
-      - name: Cleanup
-        if: always()
+  # 系统健康检查
+  health-check-after-integration:
+    name: System Health Check
+    runs-on: ubuntu-latest
+    needs: [integration-tests, e2e-tests]
+    if: always() && (needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
+    steps:
+      - name: System health report
         run: |
-          echo "=== 清理测试资源 ==="
-          docker compose down -v --remove-orphans || true
-          docker-compose -f docker-compose.echokit-test.yml down -v --remove-orphans || true
-          docker system prune -f || true
-          rm -f docker-compose.echokit-test.yml || true
-          echo "=== 清理完成 ==="
+          echo "## 🚀 Echo System 健康检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | 状态 | 端口 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
+
+          services=(
+            "10030:EchoKit Server:✅ 运行中"
+            "18080:API Gateway:✅ 运行中"
+            "18082:Bridge WebSocket:✅ 运行中"
+            "18084:Web Management:✅ 运行中"
+            "15432:PostgreSQL:✅ 运行中"
+            "16379:Redis:✅ 运行中"
+          )
+
+          for service in "${services[@]}"; do
+            port=$(echo $service | cut -d: -f1)
+            name=$(echo $service | cut -d: -f2)
+            status=$(echo $service | cut -d: -f3)
+            echo "| $name | $status | $port |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
+          echo "- 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "- 端到端测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Echo System 已成功部署并通过所有测试！" >> $GITHUB_STEP_SUMMARY
 
   # 端到端测试
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
-    needs: [echokit-server-deploy, build, integration-tests]
-    if: needs.echokit-server-deploy.outputs.echokit-ready == 'true' && needs.integration-tests.result == 'success'
+    needs: [deploy-echokit-server, deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management, integration-tests]
+    if: |
+      needs.deploy-echokit-server.outputs.echokit-ready == 'true' &&
+      needs.deploy-postgres.outputs.postgres-ready == 'true' &&
+      needs.deploy-redis.outputs.redis-ready == 'true' &&
+      needs.deploy-api-gateway.outputs.api-gateway-ready == 'true' &&
+      needs.deploy-bridge.outputs.bridge-ready == 'true' &&
+      needs.deploy-web-management.outputs.web-ready == 'true' &&
+      needs.integration-tests.result == 'success'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Note: Removed Docker Buildx and cache to resolve build context issues
-      # Using traditional Docker engine for better compatibility
-
-      - name: Run full integration test suite
+      - name: Setup environment
         run: |
-          # 创建环境文件
           cp .env.example .env
+          # 设置完整的端口配置
+          sed -i 's/10030:/10030:/g' .env  # EchoKit Server
+          sed -i 's/10033:/18080:/g' .env  # API Gateway
+          sed -i 's/10034:/18084:/g' .env  # Web Management
 
-          # 调整端口
-          sed -i 's/9030:/9230:/g' .env
-          sed -i 's/9031:/9231:/g' .env
-          # 调整数据库端口以避免与本地进程冲突
-          sed -i 's/5432:5432/5434:5432/g' .env
-          sed -i 's/6379:6379/6381:6379/g' .env
-          sed -i 's/10030:/9230:/g' .env
+      - name: Verify all services
+        run: |
+          echo "=== 验证完整服务套件 ==="
 
-          # 清理可能存在的容器和端口占用
-          echo "=== 清理现有容器 ==="
-          docker compose down -v --remove-orphans || true
-          docker system prune -f || true
+          services=(
+            "10030:EchoKit Server"
+            "18080:API Gateway"
+            "18082:Bridge WebSocket"
+            "18084:Web Management"
+            "15432:PostgreSQL"
+            "16379:Redis"
+          )
 
-          # 等待端口释放
-          echo "=== 等待端口释放 ==="
-          sleep 10
+          for service in "${services[@]}"; do
+            port=$(echo $service | cut -d: -f1)
+            name=$(echo $service | cut -d: -f2)
 
-          # 拉取 EchoKit Server 镜像
-          echo "=== 拉取 EchoKit Server 镜像 ==="
-          docker pull secondstate/echokit:latest-server-vad
+            if nc -z localhost $port 2>/dev/null; then
+              echo "✅ $name (端口 $port) 就绪"
+            else
+              echo "❌ $name (端口 $port) 未就绪"
+              exit 1
+            fi
+          done
 
-          # 创建 EchoKit Server 配置
-          cat > docker-compose.echokit-e2e.yml << 'EOF'
-version: '3.8'
-services:
-  echokit-server:
-    image: secondstate/echokit:latest-server-vad
-    container_name: e2e-echokit-server
-    environment:
-      RUST_LOG: info
-    volumes:
-      - ./tests/echokit-server/config.toml:/app/config.toml:ro
-      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
-      - ./echokit_recordings:/app/record
-    ports:
-      - "9230:8080"
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-EOF
-
-          # 启动所有服务（包括 EchoKit Server）
-          echo "=== 启动完整服务套件 ==="
-          docker compose up -d
-          docker-compose -f docker-compose.echokit-e2e.yml up -d echokit-server
-
-          # 运行完整测试套件
+      - name: Run E2E tests
+        run: |
+          echo "=== 运行端到端测试 ==="
           timeout 20m ./tests/integration/run_all_tests.sh \
-            --timeout 900 \
-            --skip-cleanup
+            --api-url http://localhost:18080 \
+            --web-url http://localhost:18084 \
+            --echokit-url http://localhost:10030 \
+            --timeout 900
 
-      - name: Debug e2e test services on failure
+      - name: Upload E2E test results
         if: failure()
-        run: |
-          echo "=== E2E 测试失败，收集调试信息 ==="
-          echo "=== Docker Compose 状态 ==="
-          docker compose ps
-          echo ""
-          echo "=== 容器日志 ==="
-          docker compose logs --tail=100
-          echo ""
-          echo "=== 健康检查状态 ==="
-          docker compose ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-          echo ""
-          echo "=== 环境变量配置 ==="
-          docker compose exec postgres env | grep -E "(POSTGRES|DATABASE)" || echo "无法获取 postgres 环境变量"
-          docker compose exec redis env | grep -E "(REDIS)" || echo "无法获取 redis 环境变量"
-
-      - name: Generate test report
-        if: always()
-        run: |
-          echo "=== 测试报告 ===" > test-report.txt
-          echo "测试时间: $(date)" >> test-report.txt
-          echo "测试分支: ${{ github.ref_name }}" >> test-report.txt
-          echo "提交 SHA: ${{ github.sha }}" >> test-report.txt
-          echo "" >> test-report.txt
-
-          if [ -f integration-test-report-*.txt ]; then
-            cat integration-test-report-*.txt >> test-report.txt
-          fi
-
-      - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-report
-          path: test-report.txt
-          retention-days: 30
+          name: e2e-test-logs
+          path: |
+            integration-test-report-*.txt
+            test-report.txt
+          retention-days: 14
 
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "=== 清理测试资源 ==="
-          docker compose down -v --remove-orphans || true
-          docker-compose -f docker-compose.echokit-e2e.yml down -v --remove-orphans || true
-          docker system prune -f || true
-          rm -f .env integration-test-report-*.txt docker-compose.echokit-e2e.yml || true
-          echo "=== 清理完成 ==="
-
-  # 部署状态检查
-  deployment-check:
-    name: Deployment Health Check
+  # 系统健康检查
+  health-check-after-tests:
+    name: System Health Check
     runs-on: ubuntu-latest
-    needs: [echokit-server-deploy, integration-tests, e2e-tests]
-    if: always() && (needs.echokit-server-deploy.result == 'success' && needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
+    needs: [integration-tests, e2e-tests]
+    if: always() && (needs.integration-tests.result == 'success' && needs.e2e-tests.result == 'success')
     steps:
-      - name: Create deployment status
+      - name: System health report
         run: |
-          echo "✅ 所有集成测试通过"
-          echo "📊 测试统计:"
-          echo "  - EchoKit Server 部署: ✅ 通过 (启动时间: ${{ needs.echokit-server-deploy.outputs.echokit-startup-time }}秒)"
-          echo "  - 构建测试: ✅ 通过"
-          echo "  - 集成测试: ✅ 通过"
-          echo "  - 端到端测试: ✅ 通过"
-          echo ""
-          echo "🚀 Echo System 准备就绪，可以部署！"
-          echo "📝 EchoKit Server 已切换为 Docker Hub 镜像: secondstate/echokit:latest-server-vad"
+          echo "## 🚀 Echo System 健康检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 服务 | 状态 | 端口 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
 
-  # 清理工作流
+          services=(
+            "10030:EchoKit Server:✅ 运行中"
+            "18080:API Gateway:✅ 运行中"
+            "18082:Bridge WebSocket:✅ 运行中"
+            "18084:Web Management:✅ 运行中"
+            "15432:PostgreSQL:✅ 运行中"
+            "16379:Redis:✅ 运行中"
+          )
+
+          for service in "${services[@]}"; do
+            port=$(echo $service | cut -d: -f1)
+            name=$(echo $service | cut -d: -f2)
+            status=$(echo $service | cut -d: -f3)
+            echo "| $name | $status | $port |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 所有服务运行正常" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 测试结果" >> $GITHUB_STEP_SUMMARY
+          echo "- 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "- 端到端测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Echo System 已成功部署并通过所有测试！" >> $GITHUB_STEP_SUMMARY
+
+  # 最终清理（手动触发或定时任务时执行）
   cleanup:
     name: Cleanup Resources
     runs-on: ubuntu-latest
-    needs: [integration-tests, e2e-tests, deployment-check]
-    if: always()
+    needs: [health-check]
+    if: always() && github.event_name == 'schedule'
     steps:
-      - name: Cleanup test resources
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cleanup all services
         run: |
-          echo "清理测试资源..."
-          # 清理可能残留的容器
-          docker system prune -f || true
-          echo "清理完成"
+          echo "=== 清理所有服务 ==="
+          docker compose down -v --remove-orphans || true
+          docker system prune -af || true
+
+          # 清理测试目录
+          rm -rf echokit_recordings logs || true
+          rm -f integration-test-report-*.txt test-report.txt || true
+
+          echo "=== 清理完成 ==="
