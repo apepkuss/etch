@@ -13,14 +13,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制 shared库
-COPY shared_temp /shared
+COPY shared /shared
 
 # 复制Bridge服务Cargo文件
-COPY Cargo.toml Cargo.lock ./
+COPY bridge/Cargo.toml bridge/Cargo.lock ./
 
 # 创建源代码目录并复制
 RUN mkdir src
-COPY src ./src
+COPY bridge/src ./src
 
 # 构建Bridge服务
 # 设置环境变量禁用 SQLx 编译时检查
