@@ -32,12 +32,17 @@ jobs:
         run: |
           cp .env.example .env
           mkdir -p echokit_recordings logs
+          # 确保测试配置目录存在
+          mkdir -p tests/echokit-server
 
       - name: Deploy EchoKit Server
         id: deploy
         run: |
           echo "=== 部署 EchoKit Server ==="
           docker pull secondstate/echokit:latest-server-vad
+
+          # 创建必要的目录
+          mkdir -p tests/echokit-server/echokit_recordings tests/echokit-server/logs
 
           # 使用测试配置部署
           cd tests/echokit-server
