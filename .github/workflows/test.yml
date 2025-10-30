@@ -17,10 +17,59 @@ on:
   workflow_dispatch:
 
 jobs:
+  deploy-llamaedge-services:
+    runs-on: ubuntu-latest
+    outputs:
+      services-ready: ${{ steps.test.outputs.success }}
+    steps:
+      - name: Deploy LlamaEdge Services
+        run: |
+          docker compose -f docker-compose.llamaedge.yml up -d
+
+      - name: Show LlamaEdge Services Logs
+        id: test
+        run: |
+          echo "=== LlamaEdge Services Logs ==="
+          docker compose -f docker-compose.llamaedge.yml logs --tail=50
+
+          echo ""
+          echo "=== Container Status ==="
+          docker compose -f docker-compose.llamaedge.yml ps
+
+          echo ""
+          echo "=== Service Health Check ==="
+          # 检查llama-api-server
+          if curl -f http://localhost:9068/health >/dev/null 2>&1; then
+            echo "✅ llama-api-server (port 9068) is healthy"
+            llama_healthy=true
+          else
+            echo "❌ llama-api-server (port 9068) is not responding"
+            llama_healthy=false
+          fi
+
+          # 检查whisper-api-server
+          if curl -f http://localhost:9069/health >/dev/null 2>&1; then
+            echo "✅ whisper-api-server (port 9069) is healthy"
+            whisper_healthy=true
+          else
+            echo "❌ whisper-api-server (port 9069) is not responding"
+            whisper_healthy=false
+          fi
+
+          # 设置输出
+          if [ "$llama_healthy" = true ] && [ "$whisper_healthy" = true ]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
   # EchoKit Server 部署
   deploy-echokit-server:
     name: Deploy EchoKit Server
     runs-on: ubuntu-latest
+    needs: [deploy-llamaedge-services]
+    if : needs.deploy-llamaedge-services.outputs.services-ready == 'true'
     outputs:
       echokit-ready: ${{ steps.test.outputs.success }}
       echokit-port: ${{ steps.deploy.outputs.port }}
@@ -75,6 +124,7 @@ jobs:
   deploy-postgres:
     name: Deploy PostgreSQL
     runs-on: ubuntu-latest
+    needs: [deploy-echokit-server]
     outputs:
       postgres-ready: ${{ steps.test.outputs.success }}
       postgres-port: ${{ steps.deploy.outputs.port }}
@@ -119,6 +169,7 @@ jobs:
   deploy-redis:
     name: Deploy Redis
     runs-on: ubuntu-latest
+    needs: [deploy-echokit-server]
     outputs:
       redis-ready: ${{ steps.test.outputs.success }}
       redis-port: ${{ steps.deploy.outputs.port }}
