@@ -255,14 +255,7 @@ jobs:
 
       - name: Download Docker images
         run: |
-          echo "=== 下载预构建的 Docker 镜像 ==="
-
-          # 下载所有预构建的镜像
-          curl -L -o api-gateway-image.tar \
-            https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${{ needs.build-api-gateway.outputs.image-tag }}/zip"
-
-          # 使用 GitHub Actions artifact 下载
-          echo "下载 API Gateway 镜像..."
+          echo "=== 使用 GitHub Actions artifacts 下载 Docker 镜像 ==="
 
       - name: Load API Gateway image
         uses: actions/download-artifact@v4
