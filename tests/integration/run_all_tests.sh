@@ -35,6 +35,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TEST_TIMEOUT=600
 EXIT_CODE=0
 
+# 默认端口配置（支持命令行参数覆盖）
+API_BASE_URL="http://localhost:18080"
+WEB_BASE_URL="http://localhost:18084"
+ECHOKIT_URL="https://eu.echokit.dev"
+
 # 测试结果统计
 TOTAL_SUITES=0
 PASSED_SUITES=0
@@ -99,7 +104,8 @@ deploy_services() {
 
     # 启动服务
     log_info "启动所有服务..."
-    if make deploy; then
+    cd "$PROJECT_ROOT"
+    if docker compose up -d; then
         log_success "服务部署成功"
     else
         log_error "服务部署失败"
@@ -112,8 +118,8 @@ deploy_services() {
     local max_wait=120
 
     while [ $elapsed -lt $max_wait ]; do
-        if curl -s http://localhost:9031/health >/dev/null 2>&1 && \
-           curl -s http://localhost:9030 >/dev/null 2>&1; then
+        if curl -s "$API_BASE_URL/health" >/dev/null 2>&1 && \
+           curl -s "$WEB_BASE_URL/health" >/dev/null 2>&1; then
             log_success "所有服务已就绪"
             return 0
         fi
@@ -202,8 +208,9 @@ cleanup_test_environment() {
     if [ "${KEEP_SERVICES:-false}" = "true" ]; then
         log_info "保留服务运行用于调试"
         log_info "访问地址:"
-        log_info "  Web管理界面: http://localhost:9030"
-        log_info "  API Gateway:  http://localhost:9031"
+        log_info "  Web管理界面: $WEB_BASE_URL"
+        log_info "  API Gateway:  $API_BASE_URL"
+        log_info "  EchoKit Server: $ECHOKIT_URL"
         log_info "要停止服务，请运行: docker compose down"
     else
         log_info "停止所有服务..."
@@ -220,15 +227,19 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
+    echo "  -u, --api-url URL       API Gateway URL (默认: $API_BASE_URL)"
+    echo "  -w, --web-url URL       Web 界面 URL (默认: $WEB_BASE_URL)"
+    echo "  -e, --echokit-url URL   EchoKit Server URL (默认: $ECHOKIT_URL)"
     echo "  -k, --keep-services     测试完成后保留服务运行"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 600)"
     echo "  --skip-deployment       跳过服务部署步骤"
     echo "  --skip-cleanup         跳过环境清理步骤"
     echo ""
     echo "示例:"
-    echo "  $0                      # 运行完整测试"
-    echo "  $0 --keep-services      # 保留服务用于调试"
-    echo "  $0 --skip-deployment    # 跳过部署（服务已运行）"
+    echo "  $0"
+    echo "  $0 --keep-services"
+    echo "  $0 --skip-deployment"
+    echo "  $0 --api-url http://localhost:8080 --web-url http://localhost:3000"
     echo ""
 }
 
@@ -243,6 +254,18 @@ main() {
             -h|--help)
                 show_help
                 exit 0
+                ;;
+            -u|--api-url)
+                API_BASE_URL="$2"
+                shift 2
+                ;;
+            -w|--web-url)
+                WEB_BASE_URL="$2"
+                shift 2
+                ;;
+            -e|--echokit-url)
+                ECHOKIT_URL="$2"
+                shift 2
                 ;;
             -k|--keep-services)
                 export KEEP_SERVICES=true
@@ -296,11 +319,11 @@ main() {
 
         # 运行测试套件
         run_test_suite "Web-API集成" \
-            "$SCRIPT_DIR/test_web_api_integration.sh" \
+            "$SCRIPT_DIR/test_web_api_integration.sh --api-url \"$API_BASE_URL\" --web-url \"$WEB_BASE_URL\"" \
             "用户界面与 API Gateway 集成测试"
 
         run_test_suite "API-存储集成" \
-            "$SCRIPT_DIR/test_api_storage_integration.sh" \
+            "$SCRIPT_DIR/test_api_storage_integration.sh --api-url \"$API_BASE_URL\"" \
             "API Gateway 与存储层集成测试"
 
         # 生成测试报告
