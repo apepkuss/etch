@@ -5,9 +5,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use echo_shared::{AppConfig, ApiResponse, UserRole};
+use echo_shared::{AppConfig, ApiResponse, UserRole, User};
 use serde_json::json;
 use serde::{Deserialize, Serialize};
+use crate::app_state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
@@ -30,37 +31,42 @@ pub struct UserInfo {
     pub role: UserRole,
 }
 
-// 模拟登录处理
+// 数据库登录处理
 pub async fn login(
-    State(config): State<AppConfig>,
+    State(app_state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<LoginResponse>>, StatusCode> {
-    // TODO: 实现实际的用户认证逻辑
-    // 暂时使用硬编码的管理员账户进行演示
-    if payload.username == "admin" && payload.password == "admin123" {
-        let user_id = "admin-001".to_string();
-        let token = echo_shared::generate_jwt(
-            &user_id,
-            &payload.username,
-            UserRole::Admin,
-            &config.jwt.secret,
-            config.jwt.expiration_hours,
-        ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // 使用数据库验证用户凭据
+    match app_state.user_service.verify_password(&payload.username, &payload.password).await {
+        Ok(Some(user)) => {
+            // 生成 JWT token
+            let token = echo_shared::generate_jwt(
+                &user.id,
+                &user.username,
+                user.role.clone(),
+                "your-super-secret-jwt-key-change-in-production", // 从环境变量或配置获取
+                24, // 24小时过期
+            ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let login_response = LoginResponse {
-            token,
-            user: UserInfo {
-                id: user_id,
-                username: payload.username,
-                email: "admin@echo.system".to_string(),
-                role: UserRole::Admin,
-            },
-            expires_in: config.jwt.expiration_hours * 3600,
-        };
+            let login_response = LoginResponse {
+                token,
+                user: UserInfo {
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    role: user.role,
+                },
+                expires_in: 24 * 3600, // 24小时
+            };
 
-        Ok(Json(ApiResponse::success(login_response)))
-    } else {
-        Ok(Json(ApiResponse::error("Invalid username or password".to_string())))
+            Ok(Json(ApiResponse::success(login_response)))
+        }
+        Ok(None) => {
+            Ok(Json(ApiResponse::error("Invalid username or password".to_string())))
+        }
+        Err(_) => {
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -89,7 +95,7 @@ pub async fn logout() -> Json<ApiResponse<serde_json::Value>> {
     Json(ApiResponse::success(response))
 }
 
-pub fn auth_routes() -> Router<AppConfig> {
+pub fn auth_routes() -> Router<AppState> {
     Router::new()
         .route("/auth/login", post(login))
         .route("/auth/me", get(get_user_info))

@@ -108,7 +108,7 @@ CREATE TRIGGER update_system_config_updated_at BEFORE UPDATE ON system_config
 
 -- 插入默认管理员用户（密码: admin123，已使用 bcrypt �哈希）
 INSERT INTO users (username, email, password_hash, role) VALUES
-('admin', 'admin@echo-system.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj6QJw/2Ej7W', 'Admin')
+('admin', 'admin@echo-system.com', '$2b$12$kkSiszw6xbg8ck/h0dPFY.Pm8PtHh.JOiPWACtMliYS3P5wKtLDcW', 'Admin')
 ON CONFLICT (username) DO NOTHING;
 
 -- 插入测试设备
