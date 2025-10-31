@@ -7,8 +7,14 @@ WORKDIR /app
 # 复制 package.json 和 package-lock.json (如果存在)
 COPY package*.json ./
 
+# 配置 npm 使用更可靠的 registry 并增加超时时间
+RUN npm config set registry https://registry.npmjs.org/ && \
+    npm config set fetch-timeout 300000 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000
+
 # 安装所有依赖（包括开发依赖，用于构建）
-RUN npm ci
+RUN npm ci --prefer-offline --no-audit
 
 # 复制源代码
 COPY . .
