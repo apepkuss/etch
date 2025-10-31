@@ -31,9 +31,8 @@ RUN useradd -m -u 1000 echo
 # 设置工作目录
 WORKDIR /app
 
-# 从构建阶段复制编译后的共享库
-COPY --from=0 /app/target/release/libecho_shared.so /usr/local/lib/
-RUN ldconfig
+# 从构建阶段复制编译后的库文件（作为Rust库使用）
+COPY --from=0 /app/target/release/libecho_shared.rlib /usr/local/lib/
 
 # 切换到非root用户
 USER echo
