@@ -256,7 +256,7 @@ jobs:
 
           # 等待服务就绪
           for i in {1..60}; do
-            if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+            if curl -f http://localhost:18084/ >/dev/null 2>&1; then
               echo "✅ Web Management 部署成功"
               break
             fi
@@ -269,7 +269,7 @@ jobs:
       - name: Test Web Management
         id: test
         run: |
-          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+          if curl -f http://localhost:18084/ >/dev/null 2>&1; then
             echo "success=true" >> $GITHUB_OUTPUT
           else
             echo "success=false" >> $GITHUB_OUTPUT
@@ -278,7 +278,7 @@ jobs:
 
   # 系统健康检查
   health-check-after-deploy:
-    name: System Health Check
+    name: System Health Check After Deployment
     runs-on: ubuntu-latest
     needs: [deploy-postgres, deploy-redis, deploy-api-gateway, deploy-bridge, deploy-web-management]
     if: always()
@@ -362,7 +362,7 @@ jobs:
           fi
 
           # 检查 Web Management
-          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+          if curl -f http://localhost:18084/ >/dev/null 2>&1; then
             echo "✅ Web Management 就绪"
           else
             echo "❌ Web Management 未就绪"
@@ -391,7 +391,7 @@ jobs:
 
   # 系统健康检查
   health-check-after-integration:
-    name: System Health Check
+    name: System Health Check After Integration Tests
     runs-on: ubuntu-latest
     needs: [integration-tests]
     if: always() && (needs.integration-tests.result == 'success')
