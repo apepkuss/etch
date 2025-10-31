@@ -255,7 +255,7 @@ jobs:
 
           # 等待服务就绪
           for i in {1..60}; do
-            if curl -f http://localhost:18084/ >/dev/null 2>&1; then
+            if curl -f http://localhost:18084/health >/dev/null 2>&1; then
               echo "✅ Web Management 部署成功"
               break
             fi
@@ -268,7 +268,7 @@ jobs:
       - name: Test Web Management
         id: test
         run: |
-          if curl -f http://localhost:18084/ >/dev/null 2>&1; then
+          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
             echo "success=true" >> $GITHUB_OUTPUT
           else
             echo "success=false" >> $GITHUB_OUTPUT
@@ -361,7 +361,7 @@ jobs:
           fi
 
           # 检查 Web Management
-          if curl -f http://localhost:18084/ >/dev/null 2>&1; then
+          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
             echo "✅ Web Management 就绪"
           else
             echo "❌ Web Management 未就绪"
