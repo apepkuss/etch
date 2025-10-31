@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置
-API_BASE_URL="http://localhost:9031"
+API_BASE_URL="http://localhost:18080"
 DB_HOST="localhost"
 DB_PORT="5432"
 DB_NAME="echo_db"
@@ -491,7 +491,7 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
-    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:9031)"
+    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:18080)"
     echo "  -d, --db-host HOST      数据库主机 (默认: localhost)"
     echo "  -p, --db-port PORT      数据库端口 (默认: 5432)"
     echo "  -r, --redis-host HOST   Redis 主机 (默认: localhost)"
@@ -499,7 +499,7 @@ show_help() {
     echo ""
     echo "示例:"
     echo "  $0"
-    echo "  $0 --api-url http://localhost:8080"
+    echo "  $0 --api-url http://localhost:18080"
     echo ""
 }
 

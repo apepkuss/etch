@@ -13,8 +13,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置
-API_BASE_URL="http://localhost:9031"
-WEB_BASE_URL="http://localhost:9030"
+API_BASE_URL="http://localhost:18080"
+WEB_BASE_URL="http://localhost:18084"
 TEST_TIMEOUT=300
 SLEEP_INTERVAL=5
 
@@ -295,13 +295,13 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
-    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:9031)"
-    echo "  -w, --web-url URL       Web 界面 URL (默认: http://localhost:9030)"
+    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:18080)"
+    echo "  -w, --web-url URL       Web 界面 URL (默认: http://localhost:18084)"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 300)"
     echo ""
     echo "示例:"
     echo "  $0"
-    echo "  $0 --api-url http://localhost:8080 --web-url http://localhost:3000"
+    echo "  $0 --api-url http://localhost:18080 --web-url http://localhost:18084"
     echo ""
 }
 
