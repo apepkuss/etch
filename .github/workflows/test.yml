@@ -365,10 +365,18 @@ jobs:
             fi
             if [ $i -eq 12 ]; then
               echo "❌ API Gateway 在 2 分钟内仍未就绪"
-              echo "检查容器状态:"
+              echo "检查所有容器状态:"
+              docker compose ps || echo "无法获取容器状态"
+              echo "检查 API Gateway 容器状态:"
               docker compose ps api-gateway || echo "API Gateway 容器不存在"
               echo "检查 API Gateway 日志:"
-              docker compose logs --tail=20 api-gateway || echo "无法获取 API Gateway 日志"
+              docker compose logs --tail=50 api-gateway || echo "无法获取 API Gateway 日志"
+              echo "检查相关服务日志:"
+              docker compose logs --tail=20 postgres redis bridge || echo "无法获取相关服务日志"
+              echo "尝试手动启动 API Gateway:"
+              docker compose up -d api-gateway || echo "无法启动 API Gateway"
+              sleep 10
+              docker compose logs --tail=20 api-gateway || echo "无法获取启动后日志"
               exit 1
             fi
           done
