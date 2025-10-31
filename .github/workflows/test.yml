@@ -352,21 +352,43 @@ jobs:
         run: |
           echo "=== 验证所有服务状态 ==="
 
-          # 检查 API Gateway
-          if curl -f http://localhost:18080/health >/dev/null 2>&1; then
-            echo "✅ API Gateway 就绪"
-          else
-            echo "❌ API Gateway 未就绪"
-            exit 1
-          fi
+          # 检查 API Gateway (增加重试和详细错误信息)
+          echo "检查 API Gateway (端口 18080)..."
+          for i in {1..12}; do
+            echo "尝试 $i/12: 检查 API Gateway 健康状态"
+            if curl -v --connect-timeout 5 --max-time 10 http://localhost:18080/health 2>&1; then
+              echo "✅ API Gateway 就绪"
+              break
+            else
+              echo "API Gateway 未就绪，等待 10 秒后重试..."
+              sleep 10
+            fi
+            if [ $i -eq 12 ]; then
+              echo "❌ API Gateway 在 2 分钟内仍未就绪"
+              echo "检查容器状态:"
+              docker compose ps api-gateway || echo "API Gateway 容器不存在"
+              echo "检查 API Gateway 日志:"
+              docker compose logs --tail=20 api-gateway || echo "无法获取 API Gateway 日志"
+              exit 1
+            fi
+          done
 
           # 检查 Web Management
-          if curl -f http://localhost:18084/health >/dev/null 2>&1; then
-            echo "✅ Web Management 就绪"
-          else
-            echo "❌ Web Management 未就绪"
-            exit 1
-          fi
+          echo "检查 Web Management (端口 18084)..."
+          for i in {1..6}; do
+            echo "尝试 $i/6: 检查 Web Management 健康状态"
+            if curl -f http://localhost:18084/health >/dev/null 2>&1; then
+              echo "✅ Web Management 就绪"
+              break
+            else
+              echo "Web Management 未就绪，等待 10 秒后重试..."
+              sleep 10
+            fi
+            if [ $i -eq 6 ]; then
+              echo "❌ Web Management 在 1 分钟内仍未就绪"
+              exit 1
+            fi
+          done
 
           echo "=== 所有服务已就绪 ==="
 

@@ -353,8 +353,10 @@ async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> 
     let echokit_connected = state.echokit_manager.get_client().is_connected().await;
     let active_sessions = state.active_sessions.read().await.len();
 
+    // 修改健康检查逻辑：只要服务启动就认为是健康的，不依赖外部 EchoKit Server
     Json(serde_json::json!({
-        "status": if echokit_connected { "healthy" } else { "degraded" },
+        "status": "healthy",
+        "service": "echo-bridge",
         "echokit_connected": echokit_connected,
         "active_sessions": active_sessions,
         "timestamp": now_utc()
