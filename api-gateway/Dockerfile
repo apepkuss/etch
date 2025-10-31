@@ -12,20 +12,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制 shared库
-COPY shared /shared
-
-# 复制API Gateway Cargo文件
-COPY api-gateway/Cargo.toml api-gateway/Cargo.lock ./
-
-# 创建源代码目录并复制
-RUN mkdir src
-COPY api-gateway/src ./src
+# 复制整个工作空间
+COPY . .
 
 # 构建API Gateway
 # 设置环境变量禁用 SQLx 编译时检查
 ENV SQLX_OFFLINE=true
-RUN cargo build --release
+RUN cargo build -p echo-api-gateway --release
 
 # 运行阶段
 FROM debian:bookworm-slim
