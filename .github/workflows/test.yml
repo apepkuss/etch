@@ -12,8 +12,7 @@ on:
       - '**.md'
       - 'docs/**'
   schedule:
-    # 每天凌晨 2 点运行
-    - cron: '0 2 * * *'
+    - cron: '0 18 * * *'
   workflow_dispatch:
 
 jobs:
