@@ -104,6 +104,7 @@ services:
     build:
       context: .
       dockerfile: ./bridge/Dockerfile
+    image: echo-bridge:latest
     container_name: echo-bridge
     restart: unless-stopped
     environment:
@@ -140,6 +141,7 @@ services:
     build:
       context: .
       dockerfile: ./api-gateway/Dockerfile
+    image: echo-api-gateway:latest
     container_name: echo-api-gateway
     restart: unless-stopped
     environment:
@@ -175,6 +177,7 @@ services:
     build:
       context: ./echo-web-management
       dockerfile: Dockerfile
+    image: echo-web-management:latest
     container_name: echo-web-management
     restart: unless-stopped
     environment:
