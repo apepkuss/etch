@@ -3,7 +3,6 @@
 # API Gateway 与存储层集成测试脚本
 # 测试 API Gateway 与 PostgreSQL、Redis 的集成
 
-set -e
 
 # 颜色定义
 RED='\033[0;31m'
@@ -75,7 +74,7 @@ test_database_tables() {
         SELECT table_name FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
         ORDER BY table_name;
-    " 2>/dev/null || echo "")
+    " 2>/dev/null)
 
     local required_tables=("users" "devices" "sessions" "user_devices" "system_config")
     local missing_tables=()
@@ -104,7 +103,7 @@ test_default_data() {
     # 检查默认管理员用户
     local admin_user=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM users WHERE username = 'admin';
-    " 2>/dev/null | grep -o '[0-9]' || echo "0")
+    " 2>/dev/null | grep -o '[0-9]')
 
     if [ "$admin_user" = "1" ]; then
         log_success "默认管理员用户存在"
@@ -116,7 +115,7 @@ test_default_data() {
     # 检查测试设备
     local test_devices=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM devices;
-    " 2>/dev/null | grep -o '[0-9]' || echo "0")
+    " 2>/dev/null | grep -o '[0-9]')
 
     if [ "$test_devices" -ge "0" ]; then
         log_success "设备表可访问 ($test_devices 个设备)"
@@ -218,7 +217,7 @@ test_session_storage() {
     # 检查会话是否在数据库中存储
     local session_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM sessions WHERE created_at > NOW() - INTERVAL '1 hour';
-    " 2>/dev/null | grep -o '[0-9]' || echo "0")
+    " 2>/dev/null | grep -o '[0-9]')
 
     log_info "最近1小时的会话数量: $session_count"
 
@@ -248,7 +247,7 @@ test_cache_aside_pattern() {
         # 模拟从数据库加载并写入缓存
         local device_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
             SELECT COUNT(*) FROM devices;
-        " 2>/dev/null | grep -o '[0-9]' || echo "0")
+        " 2>/dev/null | grep -o '[0-9]')
 
         docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
             setex "$cache_key" 300 "$device_count" >/dev/null 2>&1

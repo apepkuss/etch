@@ -3,7 +3,6 @@
 # 用户界面与 API Gateway 集成测试脚本
 # 测试 Web 管理界面与 API Gateway 之间的集成
 
-set -e
 
 # 颜色定义
 RED='\033[0;31m'
