@@ -348,6 +348,17 @@ jobs:
           sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
           sed -i 's/- "10034:5174"/- "18084:5174"/g' docker-compose.yml
 
+          # 停止所有服务并重新启动以应用新的端口配置
+          echo "=== 停止现有服务 ==="
+          docker compose down || true
+
+          echo "=== 重新启动所有服务 ==="
+          docker compose up -d
+
+          # 等待服务启动
+          echo "=== 等待服务启动 ==="
+          sleep 30
+
       - name: Wait for all services
         run: |
           echo "=== 验证所有服务状态 ==="
