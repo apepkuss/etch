@@ -417,7 +417,6 @@ jobs:
           ./tests/integration/${{ matrix.test-suite.script }} \
             --api-url http://localhost:18080 \
             --web-url http://localhost:18084 \
-            --echokit-url https://eu.echokit.dev \
             --timeout 300
 
       - name: Upload test results
