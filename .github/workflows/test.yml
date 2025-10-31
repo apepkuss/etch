@@ -414,10 +414,20 @@ jobs:
       - name: Run integration test
         run: |
           echo "=== 运行集成测试: ${{ matrix.test-suite.name }} ==="
-          ./tests/integration/${{ matrix.test-suite.script }} \
-            --api-url http://localhost:18080 \
-            --web-url http://localhost:18084 \
-            --timeout 300
+          # 根据不同的测试脚本传递相应的参数
+          if [ "${{ matrix.test-suite.script }}" = "test_web_api_integration.sh" ]; then
+            ./tests/integration/${{ matrix.test-suite.script }} \
+              --api-url http://localhost:18080 \
+              --web-url http://localhost:18084 \
+              --timeout 300
+          elif [ "${{ matrix.test-suite.script }}" = "test_api_storage_integration.sh" ]; then
+            ./tests/integration/${{ matrix.test-suite.script }} \
+              --api-url http://localhost:18080 \
+              --timeout 300
+          else
+            echo "未知测试脚本: ${{ matrix.test-suite.script }}"
+            exit 1
+          fi
 
       - name: Upload test results
         if: failure()

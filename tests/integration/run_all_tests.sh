@@ -319,11 +319,11 @@ main() {
 
         # 运行测试套件
         run_test_suite "Web-API集成" \
-            "$SCRIPT_DIR/test_web_api_integration.sh --api-url \"$API_BASE_URL\" --web-url \"$WEB_BASE_URL\"" \
+            "$SCRIPT_DIR/test_web_api_integration.sh --api-url \"$API_BASE_URL\" --web-url \"$WEB_BASE_URL\" --timeout 300" \
             "用户界面与 API Gateway 集成测试"
 
         run_test_suite "API-存储集成" \
-            "$SCRIPT_DIR/test_api_storage_integration.sh --api-url \"$API_BASE_URL\"" \
+            "$SCRIPT_DIR/test_api_storage_integration.sh --api-url \"$API_BASE_URL\" --timeout 300" \
             "API Gateway 与存储层集成测试"
 
         # 生成测试报告
