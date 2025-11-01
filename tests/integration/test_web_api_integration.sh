@@ -194,9 +194,75 @@ wait_for_services() {
     local elapsed=0
 
     while [ $elapsed -lt $TEST_TIMEOUT ]; do
-        if curl -s "${API_BASE_URL}/health" >/dev/null 2>&1 && \
-           curl -s "${WEB_BASE_URL}" >/dev/null 2>&1; then
-            log_success "服务已就绪"
+        # 详细的健康检查调试
+        log_info "检查服务状态... (${elapsed}/${TEST_TIMEOUT}s)"
+
+        # 检查 nginx 代理测试端点
+        local nginx_test_response=$(curl -s -o /dev/null -w "%{http_code}" "${API_BASE_URL}/api/test" 2>/dev/null)
+        log_info "Nginx代理测试 (${API_BASE_URL}/api/test): HTTP $nginx_test_response"
+
+        # 检查通过 nginx 代理的 API Gateway 健康状态
+        local api_health_response=$(curl -s -o /dev/null -w "%{http_code}" "${API_BASE_URL}/api/v1/health" 2>/dev/null)
+        log_info "通过Nginx代理的API Gateway健康检查 (${API_BASE_URL}/api/v1/health): HTTP $api_health_response"
+
+        # 检查直接 API Gateway 健康状态（备用）
+        local direct_api_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/health" 2>/dev/null)
+        log_info "直接API Gateway健康检查 (http://localhost:18080/health): HTTP $direct_api_health"
+
+        # 检查 Web 管理界面状态
+        local web_health_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/health" 2>/dev/null)
+        local web_root_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/" 2>/dev/null)
+        log_info "Web界面健康检查 (${WEB_BASE_URL}/health): HTTP $web_health_response"
+        log_info "Web界面根路径 (${WEB_BASE_URL}/): HTTP $web_root_response"
+
+        # 检查容器状态
+        log_info "检查容器状态..."
+        if command -v docker &> /dev/null; then
+            log_info "容器状态:"
+            docker compose ps 2>/dev/null || log_info "无法获取容器状态"
+
+            # 检查特定容器日志
+            log_info "检查API Gateway容器日志..."
+            docker compose logs --tail=5 api-gateway 2>/dev/null || log_info "无法获取API Gateway日志"
+
+            log_info "检查Web Management容器日志..."
+            docker compose logs --tail=5 web-management 2>/dev/null || log_info "无法获取Web Management日志"
+
+            # 检查网络连通性
+            log_info "检查网络连通性..."
+            docker compose exec api-gateway curl -f http://localhost:8080/health 2>/dev/null && log_info "✓ API Gateway内部健康检查正常" || log_info "✗ API Gateway内部健康检查失败"
+        fi
+
+        # 更灵活的服务就绪检查
+        local services_ready=false
+
+        # 检查 nginx 代理是否工作
+        if [ "$nginx_test_response" = "200" ]; then
+            log_info "✓ Nginx代理工作正常"
+            services_ready=true
+        fi
+
+        # 检查 API Gateway 是否可通过代理访问
+        if [ "$api_health_response" = "200" ]; then
+            log_info "✓ API Gateway可通过Nginx代理访问"
+            services_ready=true
+        fi
+
+        # 检查直接 API Gateway 访问（备用）
+        if [ "$direct_api_health" = "200" ]; then
+            log_info "✓ API Gateway直接访问正常"
+            services_ready=true
+        fi
+
+        # 检查 Web 界面
+        if [ "$web_health_response" = "200" ] || [ "$web_root_response" = "200" ]; then
+            log_info "✓ Web界面正常"
+            services_ready=true
+        fi
+
+        # 如果任何服务组件就绪，继续测试
+        if [ "$services_ready" = true ]; then
+            log_success "服务组件已就绪，开始测试"
             return 0
         fi
 

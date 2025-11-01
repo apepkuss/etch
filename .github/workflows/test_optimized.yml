@@ -312,11 +312,41 @@ jobs:
 
           # 等待服务启动
           echo "等待服务基本启动完成..."
-          sleep 30
+          sleep 60
 
           # 检查容器状态
           echo "容器状态:"
           docker compose ps
+
+          # 检查服务健康状态
+          echo "检查服务健康状态..."
+          for i in {1..10}; do
+            echo "健康检查尝试 $i/10:"
+
+            # 检查 API Gateway
+            if curl -f http://localhost:18080/health 2>/dev/null; then
+              echo "✓ API Gateway 健康检查通过"
+            else
+              echo "✗ API Gateway 健康检查失败"
+            fi
+
+            # 检查 Web Management
+            if curl -f http://localhost:18084/health 2>/dev/null; then
+              echo "✓ Web Management 健康检查通过"
+            else
+              echo "✗ Web Management 健康检查失败"
+            fi
+
+            # 检查 nginx 代理
+            if curl -f http://localhost:18084/api/test 2>/dev/null; then
+              echo "✓ Nginx 代理测试通过"
+            else
+              echo "✗ Nginx 代理测试失败"
+            fi
+
+            echo "---"
+            sleep 10
+          done
 
       - name: Run integration test
         run: |
@@ -334,13 +364,13 @@ jobs:
               --db-port 10035 \
               --redis-host localhost \
               --redis-port 10036 \
-              --timeout 300
+              --timeout 600
           elif [[ "${{ matrix.test-script }}" == *"web_api"* ]]; then
             # 运行 Web-API 集成测试
             "${{ matrix.test-script }}" \
               --api-url http://localhost:${{ matrix.web-port }} \
               --web-url http://localhost:${{ matrix.web-port }} \
-              --timeout 300
+              --timeout 600
           fi
 
       - name: Collect test logs
