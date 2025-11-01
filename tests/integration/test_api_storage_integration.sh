@@ -122,15 +122,34 @@ test_default_data() {
 
         if [ $sql_exit_code -eq 0 ]; then
             log_info "SQL 执行成功，验证用户是否创建..."
-            local create_result=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
+
+            # 先查看当前用户表中的所有用户
+            log_info "检查用户表中的所有用户..."
+            local all_users=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
+                SELECT id, username, email, role FROM users;
+            " 2>/dev/null)
+            log_info "用户表内容: $all_users"
+
+            # 专门查询 admin 用户
+            local admin_check=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
                 SELECT COUNT(*) FROM users WHERE username = 'admin';
             " 2>/dev/null | grep -o '[0-9]')
 
-            if [ "$create_result" = "1" ]; then
+            log_info "admin 用户查询结果: $admin_check"
+
+            if [ "$admin_check" = "1" ]; then
                 log_success "管理员用户创建成功"
             else
                 log_error "管理员用户创建后验证失败"
-                log_info "当前用户数量: $(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT COUNT(*) FROM users;" 2>/dev/null | grep -o '[0-9]')"
+                log_info "当前用户总数: $(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT COUNT(*) FROM users;" 2>/dev/null | grep -o '[0-9]')"
+
+                # 尝试用不同的方式查询
+                log_info "尝试模糊查询 admin 相关用户..."
+                local admin_like=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
+                    SELECT COUNT(*) FROM users WHERE username LIKE '%admin%';
+                " 2>/dev/null | grep -o '[0-9]')
+                log_info "包含 admin 的用户数量: $admin_like"
+
                 return 1
             fi
         else
