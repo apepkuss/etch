@@ -79,6 +79,10 @@ test_api_devices_endpoint() {
     log_info "认证请求: POST ${API_BASE_URL}/api/auth/login"
     log_info "认证响应: $auth_response"
 
+    # 测试nginx的/api/位置块是否工作
+    local nginx_test=$(curl -s "${WEB_BASE_URL}/api/test" 2>/dev/null)
+    log_info "nginx位置块测试: $nginx_test"
+
     # 尝试直接访问API Gateway的v1端点进行测试
     local direct_test=$(curl -s "${WEB_BASE_URL}/api/v1/health" 2>/dev/null)
     log_info "直接访问v1健康检查: $direct_test"
