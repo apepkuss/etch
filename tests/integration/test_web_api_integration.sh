@@ -79,6 +79,10 @@ test_api_devices_endpoint() {
     log_info "认证请求: POST ${API_BASE_URL}/api/auth/login"
     log_info "认证响应: $auth_response"
 
+    # 尝试直接访问API Gateway的v1端点进行测试
+    local direct_test=$(curl -s "${WEB_BASE_URL}/api/v1/health" 2>/dev/null)
+    log_info "直接访问v1健康检查: $direct_test"
+
     local token=$(echo "$auth_response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
     log_info "Token提取结果: ${token:+成功}${token:-(失败)}"
 
