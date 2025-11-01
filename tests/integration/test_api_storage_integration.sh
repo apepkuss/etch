@@ -494,6 +494,7 @@ show_help() {
     echo "  -d, --db-host HOST      数据库主机 (默认: localhost)"
     echo "  -p, --db-port PORT      数据库端口 (默认: 5432)"
     echo "  -r, --redis-host HOST   Redis 主机 (默认: localhost)"
+    echo "  --redis-port PORT       Redis 端口 (默认: 6379)"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 300)"
     echo ""
     echo "示例:"
@@ -523,6 +524,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--redis-host)
             REDIS_HOST="$2"
+            shift 2
+            ;;
+        --redis-port)
+            REDIS_PORT="$2"
             shift 2
             ;;
         -t|--timeout)
