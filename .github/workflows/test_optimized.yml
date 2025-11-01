@@ -226,16 +226,15 @@ jobs:
       needs.build-api-gateway.outputs.build-success == 'true' &&
       needs.build-bridge.outputs.build-success == 'true' &&
       (needs.build-web-management.outputs.build-success == 'true' || needs.build-web-management.result == 'failure')
-    # 暂时只运行 API-Storage 集成测试
-    # TODO: 后续启用 Web-API 集成测试
-    # strategy:
-    #   matrix:
-    #     test-script:
-    #       - tests/integration/test_api_storage_integration.sh
-    #       - tests/integration/test_web_api_integration.sh
-    #     api-port: [18080]
-    #     web-port: [18084]
-    #   fail-fast: false
+    # 启用所有集成测试
+    strategy:
+      matrix:
+        test-script:
+          - tests/integration/test_api_storage_integration.sh
+          - tests/integration/test_web_api_integration.sh
+        api-port: [18080]
+        web-port: [18084]
+      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -321,22 +320,28 @@ jobs:
 
       - name: Run integration test
         run: |
-          echo "=== 运行集成测试: test_api_storage_integration.sh ==="
-
-          # 设置测试脚本
-          TEST_SCRIPT="tests/integration/test_api_storage_integration.sh"
+          echo "=== 运行集成测试: ${{ matrix.test-script }} ==="
 
           # 确保测试脚本可执行
-          chmod +x $TEST_SCRIPT
+          chmod +x "${{ matrix.test-script }}"
 
-          # 运行 API-Storage 集成测试，使用正确的端口配置
-          $TEST_SCRIPT \
-            --api-url http://localhost:18080 \
-            --db-host localhost \
-            --db-port 10035 \
-            --redis-host localhost \
-            --redis-port 10036 \
-            --timeout 300
+          # 根据测试脚本类型运行不同的测试
+          if [[ "${{ matrix.test-script }}" == *"api_storage"* ]]; then
+            # 运行 API-Storage 集成测试
+            "${{ matrix.test-script }}" \
+              --api-url http://localhost:${{ matrix.api-port }} \
+              --db-host localhost \
+              --db-port 10035 \
+              --redis-host localhost \
+              --redis-port 10036 \
+              --timeout 300
+          elif [[ "${{ matrix.test-script }}" == *"web_api"* ]]; then
+            # 运行 Web-API 集成测试
+            "${{ matrix.test-script }}" \
+              --api-url http://localhost:${{ matrix.api-port }} \
+              --web-url http://localhost:${{ matrix.web-port }} \
+              --timeout 300
+          fi
 
       - name: Collect test logs
         if: failure()
@@ -344,19 +349,19 @@ jobs:
           echo "=== 收集测试日志 ==="
 
           # 收集所有服务的日志
-          docker compose logs --no-color > service-logs-api-storage.txt
+          docker compose logs --no-color > service-logs-${{ matrix.test-script }}.txt
 
           # 收集系统状态
-          docker compose ps >> service-logs-api-storage.txt
-          docker images >> service-logs-api-storage.txt
+          docker compose ps >> service-logs-${{ matrix.test-script }}.txt
+          docker images >> service-logs-${{ matrix.test-script }}.txt
 
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-api-storage-logs
+          name: integration-test-${{ matrix.test-script }}-logs
           path: |
-            service-logs-api-storage.txt
+            service-logs-${{ matrix.test-script }}.txt
           retention-days: 7
 
       - name: Cleanup test environment
@@ -384,7 +389,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🧪 集成测试" >> $GITHUB_STEP_SUMMARY
           echo "- API-Storage 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
-          echo "- Web-API 集成测试: ⏸️ 暂时跳过 (后续启用)" >> $GITHUB_STEP_SUMMARY
+          echo "- Web-API 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📊 优化效果" >> $GITHUB_STEP_SUMMARY
           echo "- Job 数量: 10个 → 4个 (减少60%)" >> $GITHUB_STEP_SUMMARY
@@ -392,8 +397,8 @@ jobs:
           echo "- 资源利用: 显著优化" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📝 后续计划" >> $GITHUB_STEP_SUMMARY
-          echo "1. 验证 API-Storage 集成测试稳定性" >> $GITHUB_STEP_SUMMARY
-          echo "2. 启用 Web-API 集成测试" >> $GITHUB_STEP_SUMMARY
-          echo "3. 完善测试覆盖率和错误处理" >> $GITHUB_STEP_SUMMARY
+          echo "1. 验证所有集成测试的稳定性" >> $GITHUB_STEP_SUMMARY
+          echo "2. 扩展测试覆盖率和测试用例" >> $GITHUB_STEP_SUMMARY
+          echo "3. 添加性能测试和压力测试" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🎉 **Echo System CI/CD 工作流优化成功！**" >> $GITHUB_STEP_SUMMARY
