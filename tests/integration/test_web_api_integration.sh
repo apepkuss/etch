@@ -83,9 +83,17 @@ test_api_devices_endpoint() {
     local nginx_test=$(curl -s "${WEB_BASE_URL}/api/test" 2>/dev/null)
     log_info "nginx位置块测试: $nginx_test"
 
+    # 测试直接连接到API Gateway健康检查
+    local direct_health=$(curl -s "${WEB_BASE_URL}/api/direct-health" 2>/dev/null)
+    log_info "直接连接API Gateway健康检查: $direct_health"
+
     # 尝试直接访问API Gateway的v1端点进行测试
     local direct_test=$(curl -s "${WEB_BASE_URL}/api/v1/health" 2>/dev/null)
-    log_info "直接访问v1健康检查: $direct_test"
+    log_info "通过nginx重写访问v1健康检查: $direct_test"
+
+    # 测试是否可以访问API Gateway的根健康检查
+    local root_health=$(curl -s "${WEB_BASE_URL}/api/" -H "Host: localhost" 2>/dev/null)
+    log_info "API根路径响应: $root_health"
 
     local token=$(echo "$auth_response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
     log_info "Token提取结果: ${token:+成功}${token:-(失败)}"
