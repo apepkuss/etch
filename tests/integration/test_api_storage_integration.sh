@@ -101,9 +101,9 @@ test_default_data() {
     log_info "测试默认数据..."
 
     # 检查默认管理员用户
-    local admin_user=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+    local admin_user=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM users WHERE username = 'admin';
-    " 2>/dev/null | tail -1 | tr -d ' ')
+    " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
 
     if [ "$admin_user" = "1" ]; then
         log_success "默认管理员用户存在"
@@ -131,9 +131,9 @@ test_default_data() {
             log_info "用户表内容: $all_users"
 
             # 专门查询 admin 用户
-            local admin_check=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+            local admin_check=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
                 SELECT COUNT(*) FROM users WHERE username = 'admin';
-            " 2>/dev/null | tail -1 | tr -d ' ')
+            " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
 
             log_info "admin 用户查询结果: '$admin_check'"
 
@@ -141,13 +141,13 @@ test_default_data() {
                 log_success "管理员用户创建成功"
             else
                 log_error "管理员用户创建后验证失败"
-                log_info "当前用户总数: $(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM users;" 2>/dev/null | tail -1 | tr -d ' ')"
+                log_info "当前用户总数: $(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT COUNT(*) FROM users;" 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")"
 
                 # 尝试用不同的方式查询
                 log_info "尝试模糊查询 admin 相关用户..."
-                local admin_like=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+                local admin_like=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
                     SELECT COUNT(*) FROM users WHERE username LIKE '%admin%';
-                " 2>/dev/null | tail -1 | tr -d ' ')
+                " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
                 log_info "包含 admin 的用户数量: $admin_like"
 
                 return 1
@@ -160,9 +160,9 @@ test_default_data() {
     fi
 
     # 检查测试设备
-    local test_devices=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+    local test_devices=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM devices;
-    " 2>/dev/null | tail -1 | tr -d ' ')
+    " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
 
     if [ "$test_devices" -ge "0" ]; then
         log_success "设备表可访问 ($test_devices 个设备)"
@@ -262,9 +262,9 @@ test_session_storage() {
     fi
 
     # 检查会话是否在数据库中存储
-    local session_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+    local session_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT COUNT(*) FROM sessions WHERE created_at > NOW() - INTERVAL '1 hour';
-    " 2>/dev/null | tail -1 | tr -d ' ')
+    " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
 
     log_info "最近1小时的会话数量: $session_count"
 
@@ -292,9 +292,9 @@ test_cache_aside_pattern() {
         log_info "缓存为空，测试缓存写入..."
 
         # 模拟从数据库加载并写入缓存
-        local device_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+        local device_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
             SELECT COUNT(*) FROM devices;
-        " 2>/dev/null | tail -1 | tr -d ' ')
+        " 2>/dev/null | awk 'NR==3 {print $1}' || echo "0")
 
         docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
             setex "$cache_key" 300 "$device_count" >/dev/null 2>&1
