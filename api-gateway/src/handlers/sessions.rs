@@ -429,10 +429,10 @@ pub async fn get_session_stats(
 
 pub fn session_routes() -> Router<AppConfig> {
     Router::new()
-        .route("/sessions", get(get_sessions).post(create_session))
-        .route("/sessions/stats", get(get_session_stats))
-        .route("/sessions/:id", get(get_session))
-        .route("/sessions/:id", post(update_session))
-        .route("/sessions/:id/end", post(end_session))
-        .route("/sessions/:id", delete(delete_session))
+        .route("/", get(get_sessions).post(create_session))
+        .route("/stats", get(get_session_stats))
+        .route("/:id", get(get_session))
+        .route("/:id", post(update_session))
+        .route("/:id/end", post(end_session))
+        .route("/:id", delete(delete_session))
 }

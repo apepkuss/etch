@@ -37,9 +37,9 @@ pub struct MqttStatusResponse {
 // MQTT 路由处理器
 pub fn mqtt_routes() -> Router<Arc<ApiGatewayMqttClient>> {
     Router::new()
-        .route("/mqtt/status", get(get_mqtt_status))
-        .route("/mqtt/devices/:id/config", post(publish_device_config))
-        .route("/mqtt/devices/:id/control", post(publish_device_control))
+        .route("/status", get(get_mqtt_status))
+        .route("/devices/:id/config", post(publish_device_config))
+        .route("/devices/:id/control", post(publish_device_control))
 }
 
 // 获取 MQTT 状态

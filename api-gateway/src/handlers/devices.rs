@@ -282,8 +282,8 @@ pub async fn get_device_stats(
 
 pub fn device_routes() -> Router<AppConfig> {
     Router::new()
-        .route("/devices", get(get_devices).post(create_device))
-        .route("/devices/stats", get(get_device_stats))
-        .route("/devices/:id", get(get_device).put(update_device).delete(delete_device))
-        .route("/devices/:id/restart", post(restart_device))
+        .route("/", get(get_devices).post(create_device))
+        .route("/stats", get(get_device_stats))
+        .route("/:id", get(get_device).put(update_device).delete(delete_device))
+        .route("/:id/restart", post(restart_device))
 }
