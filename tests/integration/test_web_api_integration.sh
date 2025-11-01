@@ -74,9 +74,13 @@ test_api_devices_endpoint() {
     # 首先尝试获取认证 token
     local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
         -H "Content-Type: application/json" \
-        -d '{"username":"admin","password":"admin123"}' 2>/dev/null)
+        -d '{"username":"admin","password":"admin123"}' -w "\nHTTP_CODE:%{http_code}" 2>/dev/null)
+
+    log_info "认证请求: POST ${API_BASE_URL}/api/auth/login"
+    log_info "认证响应: $auth_response"
 
     local token=$(echo "$auth_response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+    log_info "Token提取结果: ${token:+成功}${token:-(失败)}"
 
     if [ -n "$token" ]; then
         log_info "认证成功，测试设备列表 API..."
