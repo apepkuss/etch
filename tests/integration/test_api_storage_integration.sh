@@ -111,17 +111,31 @@ test_default_data() {
         log_warning "默认管理员用户不存在，尝试创建..."
 
         # 尝试手动创建管理员用户
-        local create_result=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
+        log_info "执行管理员用户创建 SQL..."
+        local sql_output=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
             INSERT INTO users (username, email, password_hash, role) VALUES
             ('admin', 'admin@echo-system.com', '\$2b\$12\$kkSiszw6xbg8ck/h0dPFY.Pm8PtHh.JOiPWACtMliYS3P5wKtLDcW', 'Admin')
             ON CONFLICT (username) DO NOTHING;
-            SELECT COUNT(*) FROM users WHERE username = 'admin';
-        " 2>/dev/null | grep -o '[0-9]')
+        " 2>&1)
 
-        if [ "$create_result" = "1" ]; then
-            log_success "管理员用户创建成功"
+        local sql_exit_code=$?
+
+        if [ $sql_exit_code -eq 0 ]; then
+            log_info "SQL 执行成功，验证用户是否创建..."
+            local create_result=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
+                SELECT COUNT(*) FROM users WHERE username = 'admin';
+            " 2>/dev/null | grep -o '[0-9]')
+
+            if [ "$create_result" = "1" ]; then
+                log_success "管理员用户创建成功"
+            else
+                log_error "管理员用户创建后验证失败"
+                log_info "当前用户数量: $(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT COUNT(*) FROM users;" 2>/dev/null | grep -o '[0-9]')"
+                return 1
+            fi
         else
-            log_error "管理员用户创建失败"
+            log_error "SQL 执行失败 (退出码: $sql_exit_code)"
+            log_info "错误输出: $sql_output"
             return 1
         fi
     fi
