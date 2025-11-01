@@ -55,7 +55,7 @@ pub async fn auth_middleware(
 
     // 对于不需要认证的路径（如健康检查、登录等），直接通过
     let path = req.uri().path();
-    if path == "/health" || path == "/api/v1/auth/login" {
+    if path == "/health" || path == "/api/v1/health" || path == "/api/v1/auth/login" {
         return Ok(next.run(req).await);
     }
 

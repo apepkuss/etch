@@ -97,7 +97,7 @@ pub async fn logout() -> Json<ApiResponse<serde_json::Value>> {
 
 pub fn auth_routes() -> Router<AppState> {
     Router::new()
-        .route("/auth/login", post(login))
-        .route("/auth/me", get(get_user_info))
-        .route("/auth/logout", post(logout))
+        .route("/login", post(login))
+        .route("/me", get(get_user_info))
+        .route("/logout", post(logout))
 }

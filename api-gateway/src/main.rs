@@ -125,20 +125,21 @@ async fn create_app(config: AppConfig, app_state: Arc<AppState>) -> Result<Route
         .layer(middleware::from_fn(request_logging))
         .into_inner();
 
-    // 创建路由
+    // 创建 API v1 路由组合
+    let api_v1_routes = Router::new()
+        .nest("/auth", auth_routes())
+        .nest("/health", health_routes())
+        .nest("/devices", device_routes())
+        .nest("/sessions", session_routes())
+        .nest("/mqtt", mqtt_routes());
+
+    // 创建主路由
     let app = Router::new()
         // 健康检查路由（无需认证）
         .route("/health", get(handlers::health::health_check))
-        .nest("/api/v1", health_routes())
 
-        // API 路由（需要认证）
-        .route("/api/v1/auth/login", post(handlers::auth::login))
-        .nest("/api/v1", auth_routes())
-        .nest("/api/v1", device_routes())
-        .nest("/api/v1", session_routes())
-
-        // MQTT 路由
-        .nest("/api/v1", mqtt_routes())
+        // API v1 路由（需要认证）
+        .nest("/api/v1", api_v1_routes)
 
         // WebSocket 路由
         .route("/ws", get(websocket::websocket_handler))

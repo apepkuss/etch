@@ -46,6 +46,6 @@ pub async fn detailed_health_check(
 
 pub fn health_routes() -> axum::Router<AppConfig> {
     axum::Router::new()
-        .route("/health", get(health_check))
-        .route("/health/detailed", get(detailed_health_check))
+        .route("/", get(health_check))
+        .route("/detailed", get(detailed_health_check))
 }
