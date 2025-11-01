@@ -338,7 +338,7 @@ jobs:
           elif [[ "${{ matrix.test-script }}" == *"web_api"* ]]; then
             # 运行 Web-API 集成测试
             "${{ matrix.test-script }}" \
-              --api-url http://localhost:${{ matrix.api-port }} \
+              --api-url http://localhost:${{ matrix.web-port }} \
               --web-url http://localhost:${{ matrix.web-port }} \
               --timeout 300
           fi
