@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -218,6 +219,86 @@ async fn websocket_test(
     })
 }
 
+// 认证相关数据结构
+#[derive(Debug, Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LoginResponse {
+    token: String,
+    user: UserInfo,
+    expires_in: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct UserInfo {
+    id: String,
+    username: String,
+    email: String,
+    role: String,
+}
+
+// 简化的登录处理 - 硬编码管理员账户
+async fn login(
+    Json(payload): Json<LoginRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    // 简化的硬编码验证
+    if payload.username == "admin" && payload.password == "admin123" {
+        let token = format!("mock-jwt-token-{}", chrono::Utc::now().timestamp());
+        let user_info = UserInfo {
+            id: "admin-001".to_string(),
+            username: "admin".to_string(),
+            email: "admin@echo.system".to_string(),
+            role: "admin".to_string(),
+        };
+
+        let response = json!({
+            "success": true,
+            "data": LoginResponse {
+                token,
+                user: user_info,
+                expires_in: 86400, // 24小时
+            }
+        });
+
+        Ok(Json(response))
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+// 用户信息获取
+async fn get_user_info() -> Result<Json<Value>, StatusCode> {
+    let user_info = UserInfo {
+        id: "admin-001".to_string(),
+        username: "admin".to_string(),
+        email: "admin@echo.system".to_string(),
+        role: "admin".to_string(),
+    };
+
+    let response = json!({
+        "success": true,
+        "data": user_info
+    });
+
+    Ok(Json(response))
+}
+
+// 退出登录
+async fn logout() -> Json<Value> {
+    let response = json!({
+        "success": true,
+        "data": {
+            "message": "Logged out successfully"
+        }
+    });
+
+    Json(response)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 启动Echo API Gateway MVP演示版本...");
@@ -226,6 +307,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/me", get(get_user_info))
+        .route("/api/auth/logout", post(logout))
         .route("/api/devices", get(get_devices))
         .route("/api/sessions", get(get_sessions))
         .route("/api/dashboard", get(get_dashboard))
@@ -238,6 +322,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔗 WebSocket测试端点: ws://localhost:8080/ws/test");
     println!("📊 API端点:");
     println!("   GET  /health - 健康检查");
+    println!("   POST /api/auth/login - 用户登录");
+    println!("   GET  /api/auth/me - 用户信息");
+    println!("   POST /api/auth/logout - 用户退出");
     println!("   GET  /api/devices - 设备列表");
     println!("   GET  /api/sessions - 会话记录");
     println!("   GET  /api/dashboard - 仪表板数据");
