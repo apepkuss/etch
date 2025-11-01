@@ -205,9 +205,27 @@ wait_for_services() {
         local api_health_response=$(curl -s -o /dev/null -w "%{http_code}" "${API_BASE_URL}/api/v1/health" 2>/dev/null)
         log_info "通过Nginx代理的API Gateway健康检查 (${API_BASE_URL}/api/v1/health): HTTP $api_health_response"
 
+        # 检查认证端点
+        local auth_response=$(curl -s -o /dev/null -w "%{http_code}" "${API_BASE_URL}/api/auth/login" 2>/dev/null)
+        log_info "认证端点检查 (${API_BASE_URL}/api/auth/login): HTTP $auth_response"
+
+        # 检查详细响应内容
+        local api_health_detail=$(curl -s "${API_BASE_URL}/api/v1/health" 2>/dev/null)
+        log_info "v1健康检查详细响应: $api_health_detail"
+
+        local auth_detail=$(curl -s "${API_BASE_URL}/api/auth/login" 2>/dev/null)
+        log_info "认证端点详细响应: $auth_detail"
+
         # 检查直接 API Gateway 健康状态（备用）
         local direct_api_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/health" 2>/dev/null)
         log_info "直接API Gateway健康检查 (http://localhost:18080/health): HTTP $direct_api_health"
+
+        # 检查直接访问 API Gateway v1 端点
+        local direct_v1_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/api/v1/health" 2>/dev/null)
+        log_info "直接API Gateway v1健康检查 (http://localhost:18080/api/v1/health): HTTP $direct_v1_health"
+
+        local direct_v1_auth=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/api/v1/auth/login" 2>/dev/null)
+        log_info "直接API Gateway认证端点 (http://localhost:18080/api/v1/auth/login): HTTP $direct_v1_auth"
 
         # 检查 Web 管理界面状态
         local web_health_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/health" 2>/dev/null)
