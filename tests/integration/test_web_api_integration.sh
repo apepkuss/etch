@@ -76,19 +76,7 @@ test_api_devices_endpoint() {
         -H "Content-Type: application/json" \
         -d '{"username":"admin","password":"admin123"}' 2>/dev/null)
 
-    log_info "认证响应: $auth_response"
-    log_info "响应长度: ${#auth_response}"
-
-    # 尝试直接访问API Gateway健康检查端点来验证连接
-    local health_check=$(curl -s "${API_BASE_URL}/health" 2>/dev/null)
-    log_info "API Gateway健康检查: $health_check"
-
-    # 尝试直接访问v1路径
-    local v1_test=$(curl -s "${API_BASE_URL}/api/v1/health" 2>/dev/null)
-    log_info "API v1健康检查: $v1_test"
-
     local token=$(echo "$auth_response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
-    log_info "提取的token: ${token:+(已获取)}${token:-(未获取)}"
 
     if [ -n "$token" ]; then
         log_info "认证成功，测试设备列表 API..."
