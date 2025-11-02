@@ -1,15 +1,16 @@
 name: Echo System Tests
 
-# TODO: 当前配置只运行 test_api_storage_integration.sh
-# 要启用 test_web_api_integration.sh，请执行以下步骤：
-# 1. 取消注释 integration-tests job 中的 strategy 配置 (行 166-173)
-# 2. 注释掉当前的固定测试脚本配置 (行 232-245)
-# 3. 取消注释注释的 matrix 测试脚本配置 (行 166-173)
-# 4. 恢复日志收集中的 matrix 变量引用 (行 253, 256, 263)
-
 on:
   push:
-    branches: [ main, dev ]
+    branches:
+      - dev
+      - main
+      - release-*
+      - feat-*
+      - ci-*
+      - refactor-*
+      - fix-*
+      - test-*
     paths-ignore:
       - '**.md'
       - 'docs/**'
