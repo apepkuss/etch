@@ -1,0 +1,12 @@
+# Docker Compose 覆盖配置 - 使用外部 EchoKit Server
+# 使用方式: docker-compose -f docker-compose.yml -f docker-compose.external-echokit.yml up
+
+services:
+  # Bridge 服务 - 移除对本地 echokit-server 的依赖
+  bridge:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # 移除 echokit-server 依赖
