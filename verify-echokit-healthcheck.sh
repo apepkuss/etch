@@ -57,10 +57,10 @@ docker inspect echo-echokit-server --format='{{json .State.Health}}' 2>/dev/null
 
 echo ""
 echo "=== 测试健康检查命令 ==="
-echo "测试: test -f /proc/1/cmdline && grep -q echokit /proc/1/cmdline"
-docker compose exec -T echokit-server sh -c "test -f /proc/1/cmdline && grep -q echokit /proc/1/cmdline" \
-    && echo "✓ 进程存在" \
-    || echo "✗ 进程不存在"
+echo "测试: cat /proc/*/cmdline | tr '\\0' '\\n' | grep -q echokit"
+docker compose exec -T echokit-server sh -c "cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q echokit" \
+    && echo "✓ EchoKit 进程存在" \
+    || echo "✗ EchoKit 进程不存在"
 
 echo ""
 echo "完成！"
