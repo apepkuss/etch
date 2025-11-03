@@ -74,7 +74,7 @@ services:
     depends_on:
       - redis
 
-  
+
   # EchoKit Server AI 推理服务 (使用外部服务，已注释)
   # echokit-server:
   #   build:
@@ -112,7 +112,7 @@ services:
       DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
       REDIS_URL: redis://:redis_password@redis:6379
       # EchoKit Server 配置 (外部服务)
-      ECHOKIT_WEBSOCKET_URL: ws://eu.echokit.dev/ws
+      ECHOKIT_WEBSOCKET_URL: wss://eu.echokit.dev/ws
       ECHOKET_API_BASE_URL: https://eu.echokit.dev
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883
