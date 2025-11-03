@@ -424,8 +424,8 @@ jobs:
           for i in {1..10}; do
             echo "健康检查尝试 $i/10:"
 
-            # 检查 EchoKit Server
-            if curl -f http://localhost:9988/health 2>/dev/null; then
+            # 检查 EchoKit Server (使用根路径，因为没有 /health 端点)
+            if curl -f http://localhost:9988/ 2>/dev/null; then
               echo "✓ EchoKit Server 健康检查通过"
             else
               echo "✗ EchoKit Server 健康检查失败"
