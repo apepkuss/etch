@@ -55,7 +55,7 @@ echo-shared = { path = "../shared" }
 
 [[bin]]
 name = "echo-api-gateway"
-path = "src/main_minimal.rs"
+path = "src/main.rs"
 
 [[bin]]
 name = "mvp_demo"
