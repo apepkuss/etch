@@ -57,8 +57,10 @@ docker inspect echo-echokit-server --format='{{json .State.Health}}' 2>/dev/null
 
 echo ""
 echo "=== 测试健康检查命令 ==="
-echo "测试: pgrep -f echokit_server"
-docker compose exec -T echokit-server pgrep -f echokit_server && echo "✓ 进程存在" || echo "✗ 进程不存在"
+echo "测试: ps | grep '[e]chokit_server'"
+docker compose exec -T echokit-server sh -c "ps | grep '[e]chokit_server'" >/dev/null \
+    && echo "✓ 进程存在" \
+    || echo "✗ 进程不存在"
 
 echo ""
 echo "完成！"
