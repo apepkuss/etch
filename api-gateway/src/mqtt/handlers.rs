@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tracing::{info, error};
 
 use super::client::ApiGatewayMqttClient;
+use crate::app_state::AppState;
 
 // MQTT 请求/响应类型
 #[derive(Debug, Deserialize)]
@@ -35,7 +36,7 @@ pub struct MqttStatusResponse {
 }
 
 // MQTT 路由处理器
-pub fn mqtt_routes() -> Router<Arc<ApiGatewayMqttClient>> {
+pub fn mqtt_routes() -> Router<AppState> {
     Router::new()
         .route("/status", get(get_mqtt_status))
         .route("/devices/:id/config", post(publish_device_config))
@@ -44,10 +45,10 @@ pub fn mqtt_routes() -> Router<Arc<ApiGatewayMqttClient>> {
 
 // 获取 MQTT 状态
 pub async fn get_mqtt_status(
-    State(mqtt_client): State<Arc<ApiGatewayMqttClient>>,
+    State(app_state): State<AppState>,
 ) -> Json<ApiResponse<MqttStatusResponse>> {
-    let is_connected = mqtt_client.is_connected().await;
-    let reconnect_count = mqtt_client.get_reconnect_count().await;
+    let is_connected = app_state.mqtt_client.is_connected().await;
+    let reconnect_count = app_state.mqtt_client.get_reconnect_count().await;
 
     let status = MqttStatusResponse {
         is_connected,
@@ -61,11 +62,11 @@ pub async fn get_mqtt_status(
 
 // 发布设备配置
 pub async fn publish_device_config(
-    State(mqtt_client): State<Arc<ApiGatewayMqttClient>>,
+    State(app_state): State<AppState>,
     Path(device_id): Path<String>,
     Json(request): Json<DeviceConfigRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match mqtt_client
+    match app_state.mqtt_client
         .publish_device_config(
             request.device_id,
             request.config,
@@ -88,11 +89,11 @@ pub async fn publish_device_config(
 
 // 发布设备控制命令
 pub async fn publish_device_control(
-    State(mqtt_client): State<Arc<ApiGatewayMqttClient>>,
+    State(app_state): State<AppState>,
     Path(device_id): Path<String>,
     Json(request): Json<DeviceControlRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
-    match mqtt_client
+    match app_state.mqtt_client
         .publish_device_control(request.device_id, request.command)
         .await
     {

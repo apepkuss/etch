@@ -10,8 +10,10 @@ pub trait AuthExt {
     fn auth_required() -> Self;
 }
 
-impl AuthExt for axum::middleware::From_fnLayer<impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> + Clone> {
-    axum::middleware::from_fn(auth_middleware)
+impl AuthExt for axum::middleware::FromFnMiddleware<impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> + Clone> {
+    fn auth_required() -> Self {
+        axum::middleware::from_fn(auth_middleware)
+    }
 }
 
 async fn auth_middleware(

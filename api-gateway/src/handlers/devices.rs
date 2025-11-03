@@ -5,10 +5,11 @@ use axum::{
     routing::{get, post, put, delete},
     Router,
 };
-use echo_shared::{AppConfig, ApiResponse, Device, DeviceStatus, DeviceType, DeviceConfig, PaginationParams, PaginatedResponse, generate_uuid, now_utc};
+use echo_shared::{ApiResponse, Device, DeviceStatus, DeviceType, DeviceConfig, PaginationParams, PaginatedResponse, generate_uuid, now_utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use crate::app_state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDeviceRequest {
@@ -87,7 +88,7 @@ fn get_mock_devices() -> &'static mut Vec<Device> {
 
 // 获取设备列表
 pub async fn get_devices(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Query(params): Query<DeviceQueryParams>,
 ) -> Json<ApiResponse<PaginatedResponse<Device>>> {
     let pagination = PaginationParams {
@@ -130,7 +131,7 @@ pub async fn get_devices(
 // 获取单个设备详情
 pub async fn get_device(
     Path(device_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Result<Json<ApiResponse<Device>>, StatusCode> {
     let devices = get_mock_devices();
 
@@ -143,7 +144,7 @@ pub async fn get_device(
 
 // 创建新设备
 pub async fn create_device(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Json(payload): Json<CreateDeviceRequest>,
 ) -> Json<ApiResponse<Device>> {
     let new_device = Device {
@@ -169,7 +170,7 @@ pub async fn create_device(
 // 更新设备信息
 pub async fn update_device(
     Path(device_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Json(payload): Json<UpdateDeviceRequest>,
 ) -> Result<Json<ApiResponse<Device>>, StatusCode> {
     let devices = get_mock_devices();
@@ -200,7 +201,7 @@ pub async fn update_device(
 // 删除设备
 pub async fn delete_device(
     Path(device_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let devices = get_mock_devices();
     let original_len = devices.len();
@@ -221,7 +222,7 @@ pub async fn delete_device(
 // 重启设备
 pub async fn restart_device(
     Path(device_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let devices = get_mock_devices();
 
@@ -254,7 +255,7 @@ pub async fn restart_device(
 
 // 获取设备统计信息
 pub async fn get_device_stats(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let devices = get_mock_devices();
 
@@ -280,7 +281,7 @@ pub async fn get_device_stats(
     Json(ApiResponse::success(stats))
 }
 
-pub fn device_routes() -> Router<AppConfig> {
+pub fn device_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_devices).post(create_device))
         .route("/stats", get(get_device_stats))

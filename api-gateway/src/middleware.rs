@@ -1,12 +1,12 @@
 use axum::{
-    body::Body,
-    extract::Request,
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
 };
 use tracing::{info, warn, error};
 use std::time::{Duration, Instant};
+use crate::app_state::AppState;
 
 pub async fn request_logging(
     req: Request,
@@ -19,9 +19,11 @@ pub async fn request_logging(
     info!("Incoming request: {} {}", method, uri);
 
     let response = next.run(req).await;
-
-    let duration = start.elapsed();
     let status = response.status();
+    let duration = start.elapsed();
+
+    // TODO: 在实际应用中更新统计信息
+    // 由于Axum中间件签名限制，暂时跳过统计更新
 
     if status.is_success() {
         info!("Request completed: {} {} - {}ms", method, uri, duration.as_millis());
@@ -56,8 +58,10 @@ pub async fn auth_middleware(
     // 对于不需要认证的路径（如健康检查、登录等），直接通过
     let path = req.uri().path();
     if path == "/health"
-        || path.starts_with("/api/v1/health")
-        || path.starts_with("/api/v1/auth") {
+        || path.starts_with("/health")
+        || path.starts_with("/auth")
+        || path.starts_with("/api/v1/auth")
+        || path == "/ws" {
         return Ok(next.run(req).await);
     }
 

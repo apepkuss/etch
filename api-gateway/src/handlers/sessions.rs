@@ -2,15 +2,17 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
-use echo_shared::{AppConfig, ApiResponse, Session, SessionStatus, PaginationParams, PaginatedResponse, generate_session_id, now_utc, EchoKitConfig, EchoKitSession, EchoKitSessionStatus};
+use echo_shared::{ApiResponse, Session, PaginationParams, PaginatedResponse, generate_session_id, now_utc, EchoKitConfig, EchoKitSession, EchoKitSessionStatus};
+use echo_shared::types::SessionStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn, error, debug};
+use crate::app_state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct SessionQueryParams {
@@ -143,7 +145,7 @@ async fn call_bridge_service_end_session(
 
 // 获取会话列表
 pub async fn get_sessions(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Query(params): Query<SessionQueryParams>,
 ) -> Json<ApiResponse<PaginatedResponse<Session>>> {
     let pagination = PaginationParams {
@@ -187,7 +189,7 @@ pub async fn get_sessions(
 // 获取单个会话详情
 pub async fn get_session(
     Path(session_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Result<Json<ApiResponse<Session>>, StatusCode> {
     let sessions = get_mock_sessions();
 
@@ -200,7 +202,7 @@ pub async fn get_session(
 
 // 创建新会话
 pub async fn create_session(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> Result<Json<ApiResponse<EchoKitSession>>, (StatusCode, Json<ApiResponse<()>>)> {
     let config = payload.config.unwrap_or_default();
@@ -273,7 +275,7 @@ pub async fn create_session(
 // 更新会话状态
 pub async fn update_session(
     Path(session_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<Session>>, StatusCode> {
     let sessions = get_mock_sessions();
@@ -314,7 +316,7 @@ pub async fn update_session(
 // 结束会话 (EchoKit 版本)
 pub async fn end_session(
     Path(session_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
     Json(payload): Json<EndSessionRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
     let reason = payload.reason.unwrap_or_else(|| "user_request".to_string());
@@ -368,7 +370,7 @@ pub async fn end_session(
 // 删除会话
 pub async fn delete_session(
     Path(session_id): Path<String>,
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let sessions = get_mock_sessions();
     let original_len = sessions.len();
@@ -388,7 +390,7 @@ pub async fn delete_session(
 
 // 获取会话统计信息
 pub async fn get_session_stats(
-    State(_config): State<AppConfig>,
+    State(_app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let sessions = get_mock_sessions();
 
@@ -427,7 +429,7 @@ pub async fn get_session_stats(
     Json(ApiResponse::success(stats))
 }
 
-pub fn session_routes() -> Router<AppConfig> {
+pub fn session_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_sessions).post(create_session))
         .route("/stats", get(get_session_stats))
