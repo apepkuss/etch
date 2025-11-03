@@ -388,8 +388,52 @@ jobs:
           echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT, EchoKit Server)..."
           docker compose up -d postgres redis mqtt echokit-server
 
-          echo "等待基础设施服务就绪..."
-          sleep 30
+          echo "等待基础设施服务就绪（PostgreSQL, Redis, MQTT）..."
+          sleep 15
+
+          # 等待 PostgreSQL, Redis, MQTT 健康
+          for i in {1..12}; do
+            echo "检查基础设施服务健康状态 ($i/12)..."
+
+            pg_healthy=$(docker inspect echo-postgres --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+            redis_healthy=$(docker inspect echo-redis --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+
+            if [ "$pg_healthy" = "healthy" ] && [ "$redis_healthy" = "healthy" ]; then
+              echo "✓ PostgreSQL 和 Redis 已就绪"
+              break
+            fi
+
+            sleep 5
+          done
+
+          # 特别等待 EchoKit Server（需要更长时间）
+          echo "等待 EchoKit Server 启动（最长 2 分钟）..."
+          for i in {1..24}; do
+            echo "检查 EchoKit Server 健康状态 ($i/24)..."
+
+            echokit_healthy=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+
+            if [ "$echokit_healthy" = "healthy" ]; then
+              echo "✓ EchoKit Server 已就绪"
+              break
+            elif [ "$echokit_healthy" = "unhealthy" ]; then
+              echo "✗ EchoKit Server 不健康，查看日志："
+              docker compose logs echokit-server --tail 30
+              exit 1
+            fi
+
+            echo "  状态: $echokit_healthy，继续等待..."
+            sleep 5
+          done
+
+          # 最终检查
+          echokit_final=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+          if [ "$echokit_final" != "healthy" ]; then
+            echo "❌ EchoKit Server 未在预期时间内就绪"
+            echo "容器日志："
+            docker compose logs echokit-server
+            exit 1
+          fi
 
           # 检查基础设施服务状态
           echo "检查基础设施服务:"
