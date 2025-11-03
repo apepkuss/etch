@@ -233,8 +233,10 @@ jobs:
         test-script:
           - tests/integration/test_api_storage_integration.sh
           - tests/integration/test_web_api_integration.sh
+          - tests/integration/test_bridge_echokit_integration.sh
         api-port: [18080]
         web-port: [18084]
+        bridge-port: [18082]
       fail-fast: false
     steps:
       - name: Checkout code
@@ -372,6 +374,13 @@ jobs:
               --api-url http://localhost:${{ matrix.web-port }} \
               --web-url http://localhost:${{ matrix.web-port }} \
               --timeout 600
+          elif [[ "${{ matrix.test-script }}" == *"bridge_echokit"* ]]; then
+            # 运行 Bridge-EchoKit 集成测试
+            "${{ matrix.test-script }}" \
+              --bridge-url http://localhost:${{ matrix.bridge-port }} \
+              --mqtt-host localhost \
+              --mqtt-port 10039 \
+              --timeout 600
           fi
 
       - name: Collect test logs
@@ -421,6 +430,7 @@ jobs:
           echo "### 🧪 集成测试" >> $GITHUB_STEP_SUMMARY
           echo "- API-Storage 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "- Web-API 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
+          echo "- Bridge-EchoKit 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📊 优化效果" >> $GITHUB_STEP_SUMMARY
           echo "- Job 数量: 10个 → 4个 (减少60%)" >> $GITHUB_STEP_SUMMARY

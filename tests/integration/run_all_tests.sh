@@ -325,6 +325,10 @@ main() {
             "$SCRIPT_DIR/test_api_storage_integration.sh --api-url \"$API_BASE_URL\" --timeout 300" \
             "API Gateway 与存储层集成测试"
 
+        run_test_suite "Bridge-EchoKit集成" \
+            "$SCRIPT_DIR/test_bridge_echokit_integration.sh --bridge-url \"http://localhost:18082\" --mqtt-host localhost --mqtt-port 10039 --timeout 300" \
+            "Bridge 与 EchoKit Server 集成测试"
+
         # 生成测试报告
         generate_test_report
 
