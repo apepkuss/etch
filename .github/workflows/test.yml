@@ -245,15 +245,48 @@ jobs:
       - name: Setup environment
         run: |
           echo "=== 设置测试环境 ==="
-          cp .env.example .env
 
-          # 设置测试端口配置
-          sed -i 's/10033:/18080:/g' .env  # API Gateway
-          sed -i 's/10034:/18084:/g' .env  # Web Management
+          # 备份原始 docker-compose.yml
+          cp docker-compose.yml docker-compose.yml.bak
 
-          # 修改 docker-compose.yml 中的端口映射以避免冲突
-          sed -i 's/- "10033:8080"/- "18080:8080"/g' docker-compose.yml
-          sed -i 's/- "10034:5174"/- "18084:5174"/g' docker-compose.yml
+          # 使用 sed 修改端口配置
+          echo "修改 Bridge 端口映射: 10031 -> 18082, 10032 -> 18083"
+          sed -i 's/"10031:8082"/"18082:8082"/g' docker-compose.yml
+          sed -i 's/"10032:8083"/"18083:8083"/g' docker-compose.yml
+
+          echo "修改 MQTT 端口映射: 10039 -> 10039 (保持不变)"
+          # MQTT 端口保持 10039，不需要修改
+
+          echo "修改 API Gateway 端口映射: 10033 -> 18080"
+          sed -i 's/"10033:8080"/"18080:8080"/g' docker-compose.yml
+
+          echo "修改 Web Management 端口映射: 10034 -> 18084"
+          sed -i 's/"10034:5174"/"18084:5174"/g' docker-compose.yml
+
+          # 验证端口配置
+          echo ""
+          echo "=== 验证端口配置 ==="
+          echo "Bridge 端口 (应该是 18082:8082 和 18083:8083):"
+          grep -A 2 "bridge:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 Bridge 端口配置"
+
+          echo ""
+          echo "MQTT 端口 (应该是 10039:1883):"
+          grep -A 2 "mqtt:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 MQTT 端口配置"
+
+          echo ""
+          echo "API Gateway 端口 (应该是 18080:8080):"
+          grep -A 2 "api-gateway:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 API Gateway 端口配置"
+
+          echo ""
+          echo "=== 完整的端口映射列表 ==="
+          grep -E '^\s+- "[0-9]+:[0-9]+"' docker-compose.yml
+
+          # 创建或复制 .env 文件
+          if [ -f ".env.example" ]; then
+            cp .env.example .env
+          else
+            echo "警告: .env.example 不存在，跳过"
+          fi
 
       - name: Download Docker images
         run: |
@@ -309,17 +342,36 @@ jobs:
           # 停止任何可能运行的服务
           docker compose down -v --remove-orphans || true
 
-          # 启动所有服务
-          echo "启动 PostgreSQL、Redis、API Gateway、Bridge 和 Web Management 服务..."
-          docker compose up -d
+          # 先启动基础设施服务
+          echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT)..."
+          docker compose up -d postgres redis mqtt
 
-          # 等待服务启动
-          echo "等待服务基本启动完成..."
+          echo "等待基础设施服务就绪..."
+          sleep 30
+
+          # 检查基础设施服务状态
+          echo "检查基础设施服务:"
+          docker compose ps postgres redis mqtt
+
+          # 启动应用服务
+          echo "2️⃣ 启动应用服务 (API Gateway, Bridge, Web Management)..."
+          docker compose up -d api-gateway bridge web-management
+
+          # 等待应用服务启动
+          echo "等待应用服务基本启动完成..."
           sleep 60
 
-          # 检查容器状态
-          echo "容器状态:"
+          # 检查所有容器状态
+          echo "所有容器状态:"
           docker compose ps
+
+          # 显示 Bridge 容器日志（用于诊断）
+          echo "=== Bridge 服务日志 (最近 50 行) ==="
+          docker compose logs bridge --tail 50 || echo "无法获取 Bridge 日志"
+
+          # 显示 MQTT 容器日志
+          echo "=== MQTT 服务日志 (最近 30 行) ==="
+          docker compose logs mqtt --tail 30 || echo "无法获取 MQTT 日志"
 
           # 检查服务健康状态
           echo "检查服务健康状态..."
@@ -333,6 +385,13 @@ jobs:
               echo "✗ API Gateway 健康检查失败"
             fi
 
+            # 检查 Bridge
+            if curl -f http://localhost:18082/health 2>/dev/null; then
+              echo "✓ Bridge 健康检查通过"
+            else
+              echo "✗ Bridge 健康检查失败"
+            fi
+
             # 检查 Web Management
             if curl -f http://localhost:18084/health 2>/dev/null; then
               echo "✓ Web Management 健康检查通过"
@@ -340,16 +399,24 @@ jobs:
               echo "✗ Web Management 健康检查失败"
             fi
 
-            # 检查 nginx 代理
-            if curl -f http://localhost:18084/api/test 2>/dev/null; then
-              echo "✓ Nginx 代理测试通过"
+            # 检查 MQTT (使用 mosquitto_pub 测试连接)
+            if docker compose exec -T mqtt mosquitto_pub -t 'test/health' -m 'ping' -q 0 2>/dev/null; then
+              echo "✓ MQTT Broker 连接测试通过"
             else
-              echo "✗ Nginx 代理测试失败"
+              echo "✗ MQTT Broker 连接测试失败"
             fi
 
             echo "---"
             sleep 10
           done
+
+          # 最终状态检查
+          echo "=== 最终服务状态 ==="
+          docker compose ps
+
+          # 检查端口监听情况
+          echo "=== 端口监听情况 ==="
+          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
 
       - name: Run integration test
         run: |
@@ -391,9 +458,22 @@ jobs:
           # 收集所有服务的日志
           docker compose logs --no-color > service-logs-${{ matrix.test-script }}.txt
 
+          # 单独收集 Bridge 和 MQTT 日志
+          echo "=== Bridge Service Logs ===" > bridge-detailed-logs.txt
+          docker compose logs bridge --no-color >> bridge-detailed-logs.txt 2>&1 || echo "无法获取 Bridge 日志"
+
+          echo "=== MQTT Service Logs ===" > mqtt-detailed-logs.txt
+          docker compose logs mqtt --no-color >> mqtt-detailed-logs.txt 2>&1 || echo "无法获取 MQTT 日志"
+
           # 收集系统状态
+          echo "=== Container Status ===" >> service-logs-${{ matrix.test-script }}.txt
           docker compose ps >> service-logs-${{ matrix.test-script }}.txt
+
+          echo "=== Docker Images ===" >> service-logs-${{ matrix.test-script }}.txt
           docker images >> service-logs-${{ matrix.test-script }}.txt
+
+          echo "=== Port Bindings ===" >> service-logs-${{ matrix.test-script }}.txt
+          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" >> service-logs-${{ matrix.test-script }}.txt || echo "无法获取端口信息"
 
       - name: Upload test results
         if: failure()
@@ -402,6 +482,8 @@ jobs:
           name: integration-test-${{ matrix.test-script }}-logs
           path: |
             service-logs-${{ matrix.test-script }}.txt
+            bridge-detailed-logs.txt
+            mqtt-detailed-logs.txt
           retention-days: 7
 
       - name: Cleanup test environment
