@@ -77,7 +77,7 @@ services:
 
   # EchoKit Server AI 推理服务 (本地部署)
   echokit-server:
-    image: secondstate/echokit:latest-server
+    image: secondstate/echokit:latest-server-vad
     container_name: echo-echokit-server
     restart: unless-stopped
     environment:
@@ -110,7 +110,7 @@ services:
       DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
       REDIS_URL: redis://:redis_password@redis:6379
       # EchoKit Server 配置 (本地服务)
-      ECHOKIT_WEBSOCKET_URL: ws://echokit-server:8080/v1/realtime
+      ECHOKIT_WEBSOCKET_URL: ws://echokit-server:8080/ws/
       ECHOKET_API_BASE_URL: http://echokit-server:8080
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883

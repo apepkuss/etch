@@ -488,11 +488,12 @@ jobs:
           for i in {1..10}; do
             echo "健康检查尝试 $i/10:"
 
-            # 检查 EchoKit Server (使用根路径，因为没有 /health 端点)
-            if curl -f http://localhost:9988/ 2>/dev/null; then
-              echo "✓ EchoKit Server 健康检查通过"
+            # 检查 EchoKit Server (只检查 Docker 健康状态，因为没有 HTTP 端点)
+            echokit_docker_health=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+            if [ "$echokit_docker_health" = "healthy" ]; then
+              echo "✓ EchoKit Server 健康检查通过 (Docker health: $echokit_docker_health)"
             else
-              echo "✗ EchoKit Server 健康检查失败"
+              echo "✗ EchoKit Server 健康检查失败 (Docker health: $echokit_docker_health)"
             fi
 
             # 检查 API Gateway
