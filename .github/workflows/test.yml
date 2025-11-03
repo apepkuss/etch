@@ -242,84 +242,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check External EchoKit Service
+      - name: Configure External EchoKit Service
         id: check-echokit
         run: |
-          echo "=== 检查外部 EchoKit Server 可达性 ==="
+          echo "=== 配置外部 EchoKit Server ==="
 
-          # 测试外部 EchoKit 服务
+          # 使用外部 EchoKit 服务 (indie.echokit.dev)
+          echo "✅ 使用外部 EchoKit Server: wss://indie.echokit.dev/ws/"
+          echo "ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/" >> $GITHUB_ENV
+          
+          # 验证外部服务可达性
           if curl -f -k -s --connect-timeout 10 https://indie.echokit.dev/ > /dev/null 2>&1; then
-            echo "✅ 外部 EchoKit Server (indie.echokit.dev) 可达"
-            echo "use_external=true" >> $GITHUB_OUTPUT
-            echo "echokit_url=wss://indie.echokit.dev/ws/" >> $GITHUB_OUTPUT
-            echo "USE_EXTERNAL_ECHOKIT=true" >> $GITHUB_ENV
-            echo "ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/" >> $GITHUB_ENV
+            echo "✅ 外部 EchoKit Server 可达"
           else
-            echo "⚠️ 外部 EchoKit Server 不可达，将使用本地服务"
-            echo "use_external=false" >> $GITHUB_OUTPUT
-            echo "echokit_url=ws://echokit-server:8080/ws/" >> $GITHUB_OUTPUT
-            echo "USE_EXTERNAL_ECHOKIT=false" >> $GITHUB_ENV
-            echo "ECHOKIT_WEBSOCKET_URL=ws://echokit-server:8080/ws/" >> $GITHUB_ENV
+            echo "⚠️ 警告: 外部 EchoKit Server 当前不可达，但将继续测试"
           fi
 
-      - name: Setup environment
-        if: steps.check-echokit.outputs.use_external == 'false'
-        env:
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          PARAFORMER_API_KEY: ${{ secrets.PARAFORMER_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Configure docker-compose
         run: |
-          echo "=== 设置本地 EchoKit Server 配置 ==="
-          echo "外部服务不可用，准备本地 EchoKit Server 配置..."
-
-          # 生成 EchoKit Server 配置文件
-          cd tests/echokit-server
-
-          # 验证环境变量
-          if [ -z "$ELEVENLABS_API_KEY" ]; then
-            echo "❌ 错误: ELEVENLABS_API_KEY 未设置"
-            exit 1
-          fi
-          if [ -z "$PARAFORMER_API_KEY" ]; then
-            echo "❌ 错误: PARAFORMER_API_KEY 未设置"
-            exit 1
-          fi
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "❌ 错误: OPENROUTER_API_KEY 未设置"
-            exit 1
-          fi
-
-          # 生成配置文件
-          chmod +x generate-config.sh
-          ./generate-config.sh
-
-          # 验证生成的配置文件
-          if [ ! -f "config.toml" ]; then
-            echo "❌ 错误: config.toml 生成失败"
-            exit 1
-          fi
-
-          # 确保没有未替换的变量
-          if grep -q '\${' config.toml; then
-            echo "❌ 错误: config.toml 中仍有未替换的变量"
-            grep '\${' config.toml
-            exit 1
-          fi
-
-          cd ../..
-          echo "✅ 本地 EchoKit Server 配置文件已生成"
-
-      - name: Configure docker-compose for EchoKit
-        run: |
-          echo "=== 配置 docker-compose 使用 EchoKit 服务 ==="
-
-          if [ "$USE_EXTERNAL_ECHOKIT" = "true" ]; then
-            echo "✅ 使用外部 EchoKit Server: $ECHOKIT_WEBSOCKET_URL"
-            echo "不需要启动本地 EchoKit Server 容器"
-          else
-            echo "⚠️ 使用本地 EchoKit Server: $ECHOKIT_WEBSOCKET_URL"
-            echo "需要启动本地 EchoKit Server 容器"
-          fi
+          echo "=== 配置 docker-compose 端口映射 ==="
+          echo "✅ 使用外部 EchoKit Server: $ECHOKIT_WEBSOCKET_URL"
 
           # 备份原始 docker-compose.yml
           cp docker-compose.yml docker-compose.yml.bak
@@ -329,9 +271,6 @@ jobs:
           sed -i 's/"10031:8082"/"18082:8082"/g' docker-compose.yml
           sed -i 's/"10032:8083"/"18083:8083"/g' docker-compose.yml
 
-          echo "修改 MQTT 端口映射: 10039 -> 10039 (保持不变)"
-          # MQTT 端口保持 10039，不需要修改
-
           echo "修改 API Gateway 端口映射: 10033 -> 18080"
           sed -i 's/"10033:8080"/"18080:8080"/g' docker-compose.yml
 
@@ -339,19 +278,6 @@ jobs:
           sed -i 's/"10034:5174"/"18084:5174"/g' docker-compose.yml
 
           # 验证端口配置
-          echo ""
-          echo "=== 验证端口配置 ==="
-          echo "Bridge 端口 (应该是 18082:8082 和 18083:8083):"
-          grep -A 2 "bridge:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 Bridge 端口配置"
-
-          echo ""
-          echo "MQTT 端口 (应该是 10039:1883):"
-          grep -A 2 "mqtt:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 MQTT 端口配置"
-
-          echo ""
-          echo "API Gateway 端口 (应该是 18080:8080):"
-          grep -A 2 "api-gateway:" docker-compose.yml | grep "ports:" -A 2 || echo "未找到 API Gateway 端口配置"
-
           echo ""
           echo "=== 完整的端口映射列表 ==="
           grep -E '^\s+- "[0-9]+:[0-9]+"' docker-compose.yml
@@ -417,20 +343,15 @@ jobs:
           # 停止任何可能运行的服务
           docker compose down -v --remove-orphans || true
 
-          # 根据是否使用外部 EchoKit 决定启动哪些服务
-          if [ "$USE_EXTERNAL_ECHOKIT" = "true" ]; then
-            echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT)..."
-            echo "✅ 使用外部 EchoKit Server，跳过本地 EchoKit 容器启动"
-            docker compose up -d postgres redis mqtt
-          else
-            echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT, 本地 EchoKit Server)..."
-            docker compose up -d postgres redis mqtt echokit-server
-          fi
+          # 启动基础设施服务 (PostgreSQL, Redis, MQTT)
+          echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT)..."
+          echo "✅ 使用外部 EchoKit Server，不启动本地 EchoKit 容器"
+          docker compose up -d postgres redis mqtt
 
           echo "等待基础设施服务就绪（PostgreSQL, Redis, MQTT）..."
           sleep 15
 
-          # 等待 PostgreSQL, Redis, MQTT 健康
+          # 等待 PostgreSQL, Redis 健康
           for i in {1..12}; do
             echo "检查基础设施服务健康状态 ($i/12)..."
 
@@ -445,80 +366,17 @@ jobs:
             sleep 5
           done
 
-          # 如果使用本地 EchoKit Server，等待其启动
-          if [ "$USE_EXTERNAL_ECHOKIT" = "false" ]; then
-            echo "等待本地 EchoKit Server 启动（最长 90 秒）..."
-            for i in {1..18}; do
-              echo "检查 EchoKit Server 健康状态 ($i/18)..."
-
-              echokit_healthy=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
-
-              if [ "$echokit_healthy" = "healthy" ]; then
-                  echo "✓ 本地 EchoKit Server 已就绪"
-                break
-              elif [ "$echokit_healthy" = "unhealthy" ]; then
-                echo "✗ EchoKit Server 不健康，查看日志："
-                docker compose logs echokit-server --tail 50
-
-                # 显示健康检查失败原因
-                echo ""
-                echo "健康检查详情："
-                docker inspect echo-echokit-server --format='{{json .State.Health}}' | jq '.' || true
-                exit 1
-              fi
-
-              # 显示进度和日志片段
-              if [ $((i % 3)) -eq 0 ]; then
-                echo "  状态: $echokit_healthy"
-                echo "  最新日志:"
-                docker compose logs echokit-server --tail 3 | sed 's/^/    /'
-              else
-                echo "  状态: $echokit_healthy，继续等待..."
-              fi
-
-              sleep 5
-            done
-
-            # 最终检查
-            echokit_final=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
-            if [ "$echokit_final" != "healthy" ]; then
-              echo "❌ EchoKit Server 未在预期时间内就绪 (最终状态: $echokit_final)"
-              echo ""
-              echo "完整容器日志："
-              docker compose logs echokit-server
-              echo ""
-              echo "健康检查详情："
-              docker inspect echo-echokit-server --format='{{json .State.Health}}' | jq '.' || true
-              echo ""
-              echo "容器状态："
-              docker inspect echo-echokit-server --format='{{json .State}}' | jq '.' || true
-              exit 1
-            fi
-          fi
-
           # 检查基础设施服务状态
           echo "检查基础设施服务:"
-          if [ "$USE_EXTERNAL_ECHOKIT" = "true" ]; then
-            docker compose ps postgres redis mqtt
-          else
-            docker compose ps postgres redis mqtt echokit-server
-          fi
+          docker compose ps postgres redis mqtt
 
           # 启动应用服务，并传递 EchoKit URL 环境变量
           echo "2️⃣ 启动应用服务 (API Gateway, Bridge, Web Management)..."
-          echo "Bridge 将使用 EchoKit URL: $ECHOKIT_WEBSOCKET_URL"
-
-          # 根据是否使用外部 EchoKit 选择不同的 compose 配置
-          if [ "$USE_EXTERNAL_ECHOKIT" = "true" ]; then
-            echo "使用外部 EchoKit 配置 (移除本地服务依赖)"
-            ECHOKIT_WEBSOCKET_URL="$ECHOKIT_WEBSOCKET_URL" \
-            docker compose -f docker-compose.yml -f docker-compose.external-echokit.yml \
-              up -d api-gateway bridge web-management
-          else
-            echo "使用本地 EchoKit 配置"
-            ECHOKIT_WEBSOCKET_URL="$ECHOKIT_WEBSOCKET_URL" \
-            docker compose up -d api-gateway bridge web-management
-          fi
+          echo "Bridge 将使用外部 EchoKit URL: $ECHOKIT_WEBSOCKET_URL"
+          
+          ECHOKIT_WEBSOCKET_URL="$ECHOKIT_WEBSOCKET_URL" \
+          docker compose -f docker-compose.yml -f docker-compose.external-echokit.yml \
+            up -d api-gateway bridge web-management
 
           # 等待应用服务启动
           echo "等待应用服务基本启动完成..."
@@ -527,14 +385,6 @@ jobs:
           # 检查所有容器状态
           echo "所有容器状态:"
           docker compose ps
-
-          # 显示 EchoKit Server 容器日志（仅在使用本地服务时）
-          if [ "$USE_EXTERNAL_ECHOKIT" = "false" ]; then
-            echo "=== 本地 EchoKit Server 服务日志 (最近 50 行) ==="
-            docker compose logs echokit-server --tail 50 || echo "无法获取 EchoKit Server 日志"
-          else
-            echo "=== 使用外部 EchoKit Server (wss://indie.echokit.dev/ws/) ==="
-          fi
 
           # 显示 Bridge 容器日志（用于诊断）
           echo "=== Bridge 服务日志 (最近 50 行) ==="
@@ -549,17 +399,7 @@ jobs:
           for i in {1..10}; do
             echo "健康检查尝试 $i/10:"
 
-            # 检查 EchoKit Server（仅在使用本地服务时）
-            if [ "$USE_EXTERNAL_ECHOKIT" = "false" ]; then
-              echokit_docker_health=$(docker inspect echo-echokit-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
-              if [ "$echokit_docker_health" = "healthy" ]; then
-                echo "✓ 本地 EchoKit Server 健康检查通过 (Docker health: $echokit_docker_health)"
-              else
-                echo "✗ 本地 EchoKit Server 健康检查失败 (Docker health: $echokit_docker_health)"
-              fi
-            else
-              echo "✓ 使用外部 EchoKit Server"
-            fi
+            echo "✓ 使用外部 EchoKit Server (wss://indie.echokit.dev/ws/)"
 
             # 检查 API Gateway
             if curl -f http://localhost:18080/health 2>/dev/null; then
@@ -599,7 +439,7 @@ jobs:
 
           # 检查端口监听情况
           echo "=== 端口监听情况 ==="
-          netstat -tlnp | grep -E "(9988|18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
+          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
 
       - name: Run integration test
         run: |
@@ -647,15 +487,6 @@ jobs:
           echo "=== Bridge Service Logs ===" > bridge-detailed-logs.txt
           docker compose logs bridge --no-color >> bridge-detailed-logs.txt 2>&1 || echo "无法获取 Bridge 日志"
 
-          # 仅在使用本地 EchoKit 时收集其日志
-          if [ "$USE_EXTERNAL_ECHOKIT" = "false" ]; then
-            echo "=== 本地 EchoKit Server Logs ===" > echokit-detailed-logs.txt
-            docker compose logs echokit-server --no-color >> echokit-detailed-logs.txt 2>&1 || echo "无法获取 EchoKit Server 日志"
-          else
-            echo "使用外部 EchoKit Server (wss://indie.echokit.dev/ws/)" > echokit-detailed-logs.txt
-            echo "无本地 EchoKit 日志" >> echokit-detailed-logs.txt
-          fi
-
           echo "=== MQTT Service Logs ===" > mqtt-detailed-logs.txt
           docker compose logs mqtt --no-color >> mqtt-detailed-logs.txt 2>&1 || echo "无法获取 MQTT 日志"
 
@@ -676,7 +507,6 @@ jobs:
           name: integration-test-${{ matrix.test-script }}-logs
           path: |
             service-logs-${{ matrix.test-script }}.txt
-            echokit-detailed-logs.txt
             bridge-detailed-logs.txt
             mqtt-detailed-logs.txt
           retention-days: 7
