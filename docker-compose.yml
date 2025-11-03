@@ -75,29 +75,27 @@ services:
       - redis
 
 
-  # EchoKit Server AI 推理服务 (使用外部服务，已注释)
-  # echokit-server:
-  #   build:
-  #     context: ./echokit-server-deployment
-  #     dockerfile: Dockerfile
-  #   container_name: echo-echokit-server
-  #   restart: unless-stopped
-  #   environment:
-  #     RUST_LOG: info
-  #     ECHOKET_CONFIG: /app/config/config.toml
-  #   volumes:
-  #     - ./echokit-server-deployment/config:/app/config:ro
-  #     - echokit_logs:/app/logs
-  #   ports:
-  #     - "10030:9988"
-  #   networks:
-  #     - echo-network
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:9988/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
+  # EchoKit Server AI 推理服务 (本地部署)
+  echokit-server:
+    image: secondstate/echokit:latest-server
+    container_name: echo-echokit-server
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./tests/echokit-server/config.toml:/app/config.toml:ro
+      - ./tests/echokit-server/hello.wav:/app/hello.wav:ro
+      - echokit_record:/app/record
+    ports:
+      - "9988:8080"
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # Bridge 服务
   bridge:
@@ -111,9 +109,9 @@ services:
       RUST_LOG: info
       DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
       REDIS_URL: redis://:redis_password@redis:6379
-      # EchoKit Server 配置 (外部服务)
-      ECHOKIT_WEBSOCKET_URL: wss://eu.echokit.dev/ws
-      ECHOKET_API_BASE_URL: https://eu.echokit.dev
+      # EchoKit Server 配置 (本地服务)
+      ECHOKIT_WEBSOCKET_URL: ws://echokit-server:8080/v1/realtime
+      ECHOKET_API_BASE_URL: http://echokit-server:8080
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883
       # 网络配置
@@ -128,6 +126,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      echokit-server:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
@@ -228,7 +228,7 @@ volumes:
     driver: local
   pgadmin_data:
     driver: local
-  echokit_logs:
+  echokit_record:
     driver: local
   mqtt_data:
     driver: local

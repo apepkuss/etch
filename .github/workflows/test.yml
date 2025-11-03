@@ -243,8 +243,50 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup environment
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          PARAFORMER_API_KEY: ${{ secrets.PARAFORMER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           echo "=== 设置测试环境 ==="
+
+          # 生成 EchoKit Server 配置文件
+          echo "生成 EchoKit Server 配置文件（使用 GitHub Secrets）..."
+          cd tests/echokit-server
+
+          # 验证环境变量
+          if [ -z "$ELEVENLABS_API_KEY" ]; then
+            echo "❌ 错误: ELEVENLABS_API_KEY 未设置"
+            exit 1
+          fi
+          if [ -z "$PARAFORMER_API_KEY" ]; then
+            echo "❌ 错误: PARAFORMER_API_KEY 未设置"
+            exit 1
+          fi
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "❌ 错误: OPENROUTER_API_KEY 未设置"
+            exit 1
+          fi
+
+          # 生成配置文件
+          chmod +x generate-config.sh
+          ./generate-config.sh
+
+          # 验证生成的配置文件
+          if [ ! -f "config.toml" ]; then
+            echo "❌ 错误: config.toml 生成失败"
+            exit 1
+          fi
+
+          # 确保没有未替换的变量
+          if grep -q '\${' config.toml; then
+            echo "❌ 错误: config.toml 中仍有未替换的变量"
+            grep '\${' config.toml
+            exit 1
+          fi
+
+          cd ../..
+          echo "✅ EchoKit Server 配置文件已生成"
 
           # 备份原始 docker-compose.yml
           cp docker-compose.yml docker-compose.yml.bak
@@ -342,16 +384,16 @@ jobs:
           # 停止任何可能运行的服务
           docker compose down -v --remove-orphans || true
 
-          # 先启动基础设施服务
-          echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT)..."
-          docker compose up -d postgres redis mqtt
+          # 先启动基础设施服务和EchoKit Server
+          echo "1️⃣ 启动基础设施服务 (PostgreSQL, Redis, MQTT, EchoKit Server)..."
+          docker compose up -d postgres redis mqtt echokit-server
 
           echo "等待基础设施服务就绪..."
           sleep 30
 
           # 检查基础设施服务状态
           echo "检查基础设施服务:"
-          docker compose ps postgres redis mqtt
+          docker compose ps postgres redis mqtt echokit-server
 
           # 启动应用服务
           echo "2️⃣ 启动应用服务 (API Gateway, Bridge, Web Management)..."
@@ -365,6 +407,10 @@ jobs:
           echo "所有容器状态:"
           docker compose ps
 
+          # 显示 EchoKit Server 容器日志（用于诊断）
+          echo "=== EchoKit Server 服务日志 (最近 50 行) ==="
+          docker compose logs echokit-server --tail 50 || echo "无法获取 EchoKit Server 日志"
+
           # 显示 Bridge 容器日志（用于诊断）
           echo "=== Bridge 服务日志 (最近 50 行) ==="
           docker compose logs bridge --tail 50 || echo "无法获取 Bridge 日志"
@@ -377,6 +423,13 @@ jobs:
           echo "检查服务健康状态..."
           for i in {1..10}; do
             echo "健康检查尝试 $i/10:"
+
+            # 检查 EchoKit Server
+            if curl -f http://localhost:9988/health 2>/dev/null; then
+              echo "✓ EchoKit Server 健康检查通过"
+            else
+              echo "✗ EchoKit Server 健康检查失败"
+            fi
 
             # 检查 API Gateway
             if curl -f http://localhost:18080/health 2>/dev/null; then
@@ -416,7 +469,7 @@ jobs:
 
           # 检查端口监听情况
           echo "=== 端口监听情况 ==="
-          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
+          netstat -tlnp | grep -E "(9988|18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
 
       - name: Run integration test
         run: |
@@ -458,7 +511,10 @@ jobs:
           # 收集所有服务的日志
           docker compose logs --no-color > service-logs-${{ matrix.test-script }}.txt
 
-          # 单独收集 Bridge 和 MQTT 日志
+          # 单独收集 EchoKit Server、Bridge 和 MQTT 日志
+          echo "=== EchoKit Server Logs ===" > echokit-detailed-logs.txt
+          docker compose logs echokit-server --no-color >> echokit-detailed-logs.txt 2>&1 || echo "无法获取 EchoKit Server 日志"
+
           echo "=== Bridge Service Logs ===" > bridge-detailed-logs.txt
           docker compose logs bridge --no-color >> bridge-detailed-logs.txt 2>&1 || echo "无法获取 Bridge 日志"
 
@@ -482,6 +538,7 @@ jobs:
           name: integration-test-${{ matrix.test-script }}-logs
           path: |
             service-logs-${{ matrix.test-script }}.txt
+            echokit-detailed-logs.txt
             bridge-detailed-logs.txt
             mqtt-detailed-logs.txt
           retention-days: 7

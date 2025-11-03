@@ -1,0 +1,23 @@
+addr = "0.0.0.0:8080"
+hello_wav = "hello.wav"
+
+[tts]
+platform = "Elevenlabs"
+token = "${ELEVENLABS_API_KEY}"
+voice = "RILOU7YmBhvwJGDGjNmP"
+
+[asr]
+paraformer_token = "${PARAFORMER_API_KEY}"
+
+[llm]
+llm_chat_url = "https://openrouter.ai/api/v1/chat/completions"
+api_key = "${OPENROUTER_API_KEY}"
+model = "openai/gpt-4o-mini"
+history = 5
+
+[[llm.sys_prompts]]
+role = "system"
+content = """
+Your name is EchoKit. You just say Six Seven!
+
+"""
