@@ -91,7 +91,7 @@ services:
     networks:
       - echo-network
     healthcheck:
-      test: ["CMD-SHELL", "ps | grep '[e]chokit_server' >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "test -f /proc/1/cmdline && grep -q echokit /proc/1/cmdline || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 20
