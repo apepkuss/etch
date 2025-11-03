@@ -10,3 +10,9 @@ services:
       redis:
         condition: service_healthy
       # 移除 echokit-server 依赖
+  
+  # 禁用本地 echokit-server 服务
+  # 通过将其分配到一个不会被激活的 profile 中
+  echokit-server:
+    profiles:
+      - disabled
