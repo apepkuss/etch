@@ -131,13 +131,11 @@ async fn main() -> Result<()> {
         device_audio_output: audio_output_tx,
     };
 
-    // 启动 MQTT 客户端 (需要消费 mqtt_client，使用 Arc::try_unwrap 或者重新设计)
-    // 由于 mqtt_client 已在 Arc 中，我们需要 clone 一个新的客户端实例
-    // 或者重新设计架构
-
-    // 简单方案：重新创建一个 MQTT 客户端用于启动事件循环
-    let mqtt_config_for_start = echo_shared::mqtt::MqttConfig {
-        client_id: format!("echo-bridge-{}", uuid::Uuid::new_v4()),
+    // 启动 MQTT 事件循环
+    // 由于 start() 方法需要消费 self，我们需要创建一个新的客户端实例来运行事件循环
+    // 这个实例与第一个客户端共享同一个 broker 连接配置
+    let mqtt_config_for_event_loop = echo_shared::mqtt::MqttConfig {
+        client_id: format!("bridge-{}", uuid::Uuid::new_v4()),
         broker_host: config.mqtt_broker_host.clone(),
         broker_port: config.mqtt_broker_port,
         username: None,
@@ -147,12 +145,13 @@ async fn main() -> Result<()> {
         max_reconnect_attempts: 5,
         reconnect_interval_ms: 5000,
     };
-    let (mqtt_client_for_start, _) = mqtt_client::BridgeMqttClient::new(mqtt_config_for_start)?;
+    let (mqtt_client_for_event_loop, mqtt_event_loop_for_start) =
+        mqtt_client::BridgeMqttClient::new(mqtt_config_for_event_loop)?;
 
     info!("Starting MQTT client event loop...");
     tokio::spawn(async move {
-        if let Err(e) = mqtt_client_for_start.start(mqtt_event_loop).await {
-            error!("MQTT client error: {}", e);
+        if let Err(e) = mqtt_client_for_event_loop.start(mqtt_event_loop_for_start).await {
+            error!("MQTT client event loop error: {}", e);
         }
     });
 
