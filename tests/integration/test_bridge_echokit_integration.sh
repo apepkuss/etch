@@ -81,7 +81,7 @@ wait_for_services() {
 
 # 测试 Bridge 健康检查
 test_bridge_health_check() {
-    log_info "测试 Bridge 服务健康检查..."
+    log_info "🧱 测试 Bridge 服务健康检查..."
 
     local health_response=$(curl -s "${BRIDGE_BASE_URL}/health" 2>/dev/null)
 
@@ -108,7 +108,7 @@ test_bridge_health_check() {
 
 # 测试 Bridge 统计信息
 test_bridge_stats() {
-    log_info "测试 Bridge 服务统计信息..."
+    log_info "🧱 测试 Bridge 服务统计信息..."
 
     local stats_response=$(curl -s "${BRIDGE_BASE_URL}/stats" 2>/dev/null)
 
@@ -133,7 +133,7 @@ test_bridge_stats() {
 
 # 测试 MQTT 连接
 test_mqtt_connection() {
-    log_info "测试 MQTT Broker 连接..."
+    log_info "🧱 测试 MQTT Broker 连接..."
 
     # 尝试使用 docker compose exec（可能在某些 CI 环境中不可用）
     local mqtt_version=$(docker compose exec -T mqtt mosquitto_sub -t '$SYS/broker/version' -C 1 --quiet 2>/dev/null)
@@ -172,7 +172,7 @@ test_mqtt_connection() {
 
 # 测试 MQTT 发布订阅
 test_mqtt_pubsub() {
-    log_info "测试 MQTT 发布/订阅功能..."
+    log_info "🧱 测试 MQTT 发布/订阅功能..."
 
     # 检查 docker compose exec 是否可用
     if ! docker compose exec -T mqtt echo "test" >/dev/null 2>&1; then
@@ -217,7 +217,7 @@ test_mqtt_pubsub() {
 
 # 测试 Bridge MQTT 订阅
 test_bridge_mqtt_subscription() {
-    log_info "测试 Bridge MQTT 主题订阅..."
+    log_info "🧱 测试 Bridge MQTT 主题订阅..."
 
     # Bridge 应该订阅设备配置和控制主题
     local bridge_topics=$(docker compose logs bridge 2>/dev/null | grep -i "subscribed" || echo "")
@@ -235,7 +235,7 @@ test_bridge_mqtt_subscription() {
 
 # 测试 UDP 端口监听
 test_udp_port_listening() {
-    log_info "测试 Bridge UDP 端口监听..."
+    log_info "🧱 测试 Bridge UDP 端口监听..."
 
     # 检查 UDP 端口是否被 Bridge 监听
     if command -v nc >/dev/null 2>&1; then
@@ -258,7 +258,7 @@ test_udp_port_listening() {
 
 # 测试 Bridge 与 EchoKit WebSocket 连接
 test_bridge_echokit_websocket() {
-    log_info "测试 Bridge 与 EchoKit WebSocket 连接..."
+    log_info "🧱 测试 Bridge 与 EchoKit WebSocket 连接..."
 
     # 检查 Bridge 日志中是否有 EchoKit 连接信息
     local echokit_logs=$(docker compose logs bridge 2>/dev/null | grep -i "echokit\|websocket" | tail -20)
@@ -283,7 +283,7 @@ test_bridge_echokit_websocket() {
 
 # 测试音频处理器初始化
 test_audio_processor_initialization() {
-    log_info "测试 Bridge 音频处理器初始化..."
+    log_info "🧱 测试 Bridge 音频处理器初始化..."
 
     # 检查 Bridge 日志中是否有音频处理器启动信息
     local audio_logs=$(docker compose logs bridge 2>/dev/null | grep -i "audio\|processor\|started" | tail -10)
@@ -301,7 +301,7 @@ test_audio_processor_initialization() {
 
 # 生成测试音频数据
 generate_test_audio() {
-    log_info "生成测试音频数据..."
+    log_info "🧱 生成测试音频数据..."
 
     # 创建测试音频目录
     mkdir -p "$TEST_AUDIO_DIR"
@@ -337,7 +337,7 @@ generate_test_audio() {
 
 # 测试 UDP 音频上传
 test_udp_audio_upload() {
-    log_info "测试 UDP 音频上传到 Bridge..."
+    log_info "🧱 测试 UDP 音频上传到 Bridge..."
 
     # 生成测试音频
     if ! generate_test_audio; then
@@ -391,7 +391,7 @@ test_udp_audio_upload() {
 
 # 测试端到端语音交互流程
 test_end_to_end_voice_interaction() {
-    log_info "测试端到端语音交互流程 (UDP → Bridge → EchoKit → Bridge → UDP)..."
+    log_info "🧱 测试端到端语音交互流程 (UDP → Bridge → EchoKit → Bridge → UDP)..."
 
     # 前置条件检查
     if ! command -v nc >/dev/null 2>&1; then
@@ -494,7 +494,7 @@ test_end_to_end_voice_interaction() {
 
 # 测试音频格式转换
 test_audio_format_conversion() {
-    log_info "测试音频格式转换能力..."
+    log_info "🧱 测试音频格式转换能力..."
 
     # 检查 Bridge 是否支持音频格式转换
     local bridge_logs=$(docker compose logs bridge 2>/dev/null | grep -i "codec\|format\|encode\|decode" | tail -10)
@@ -512,7 +512,7 @@ test_audio_format_conversion() {
 
 # 测试 VAD（语音活动检测）
 test_voice_activity_detection() {
-    log_info "测试语音活动检测 (VAD)..."
+    log_info "🧱 测试语音活动检测 (VAD)..."
 
     # 检查 Bridge 或 EchoKit 的 VAD 日志
     local vad_logs=$(docker compose logs bridge 2>/dev/null | grep -i "vad\|voice.*activity\|speech.*detect" | tail -10)
@@ -530,7 +530,7 @@ test_voice_activity_detection() {
 
 # 测试会话管理
 test_session_management() {
-    log_info "测试 Bridge 会话管理..."
+    log_info "🧱 测试 Bridge 会话管理..."
 
     # 检查 Bridge 统计信息中的会话数据
     local stats_response=$(curl -s "${BRIDGE_BASE_URL}/stats" 2>/dev/null)
@@ -560,7 +560,7 @@ test_session_management() {
 
 # 测试设备在线状态
 test_device_online_status() {
-    log_info "测试设备在线状态管理..."
+    log_info "🧱 测试设备在线状态管理..."
 
     local stats_response=$(curl -s "${BRIDGE_BASE_URL}/stats" 2>/dev/null)
 
@@ -584,7 +584,7 @@ test_device_online_status() {
 
 # 测试 Bridge 错误处理
 test_bridge_error_handling() {
-    log_info "测试 Bridge 错误处理..."
+    log_info "🧱 测试 Bridge 错误处理..."
 
     # 检查 Bridge 日志中的错误处理
     local error_logs=$(docker compose logs bridge 2>/dev/null | grep -i "error\|failed\|retry" | tail -10)
@@ -610,7 +610,7 @@ test_bridge_error_handling() {
 
 # 测试服务依赖关系
 test_service_dependencies() {
-    log_info "测试 Bridge 服务依赖关系..."
+    log_info "🧱 测试 Bridge 服务依赖关系..."
 
     # 检查 Bridge 是否依赖 PostgreSQL 和 Redis
     local compose_deps=$(docker compose config 2>/dev/null | grep -A 5 "bridge:" | grep "depends_on" -A 3)
@@ -634,7 +634,7 @@ test_service_dependencies() {
 
 # 测试 Bridge 资源使用
 test_bridge_resource_usage() {
-    log_info "测试 Bridge 服务资源使用..."
+    log_info "🧱 测试 Bridge 服务资源使用..."
 
     # 获取 Bridge 容器的资源使用情况
     local resource_stats=$(docker stats echo-bridge --no-stream --format "CPU: {{.CPUPerc}} | MEM: {{.MemUsage}}" 2>/dev/null)
@@ -651,7 +651,7 @@ test_bridge_resource_usage() {
 
 # 测试 EchoKit Server 连接状态（通过 Bridge 统计信息）
 test_echokit_server_reachability() {
-    log_info "测试 EchoKit Server 连接状态（通过 Bridge）..."
+    log_info "🧱 测试 EchoKit Server 连接状态（通过 Bridge）..."
 
     # 通过 Bridge 统计信息检查 EchoKit 连接状态
     local stats_response=$(curl -s "${BRIDGE_BASE_URL}/stats" 2>/dev/null)
