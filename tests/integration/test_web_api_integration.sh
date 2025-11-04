@@ -36,7 +36,7 @@ log_error() {
 
 # 测试函数
 test_api_health() {
-    log_info "测试 API Gateway 健康检查..."
+    log_info "🧱 测试 API Gateway 健康检查..."
     local response=$(curl -s -o /dev/null -w "%{http_code}" "${API_BASE_URL}/health" 2>/dev/null)
 
     if [ "$response" = "200" ]; then
@@ -49,7 +49,7 @@ test_api_health() {
 }
 
 test_web_health() {
-    log_info "测试 Web 管理界面健康检查..."
+    log_info "🧱 测试 Web 管理界面健康检查..."
     local response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/health" 2>/dev/null)
 
     if [ "$response" = "200" ]; then
@@ -69,7 +69,7 @@ test_web_health() {
 }
 
 test_api_devices_endpoint() {
-    log_info "测试设备列表 API 端点..."
+    log_info "🧱 测试设备列表 API 端点..."
 
     # 首先尝试获取认证 token
     local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
@@ -127,7 +127,7 @@ test_api_devices_endpoint() {
 }
 
 test_cors_headers() {
-    log_info "测试 CORS 头配置..."
+    log_info "🧱 测试 CORS 头配置..."
 
     local response=$(curl -s -I -X OPTIONS "${API_BASE_URL}/api/devices" \
         -H "Origin: ${WEB_BASE_URL}" \
@@ -143,7 +143,7 @@ test_cors_headers() {
 }
 
 test_web_api_communication() {
-    log_info "测试 Web 界面与 API Gateway 通信..."
+    log_info "🧱 测试 Web 界面与 API Gateway 通信..."
 
     # 检查 Web 界面是否能够访问 API
     local web_config=$(curl -s "${WEB_BASE_URL}" 2>/dev/null | grep -o "api.*base.*url" | head -5)
@@ -158,7 +158,7 @@ test_web_api_communication() {
 }
 
 test_dashboard_data() {
-    log_info "测试仪表板数据获取..."
+    log_info "🧱 测试仪表板数据获取..."
 
     # 尝试获取仪表板数据
     local dashboard_response=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -174,7 +174,7 @@ test_dashboard_data() {
 }
 
 test_web_static_assets() {
-    log_info "测试 Web 界面静态资源..."
+    log_info "🧱 测试 Web 界面静态资源..."
 
     local js_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/static/js/" 2>/dev/null)
     local css_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/static/css/" 2>/dev/null)

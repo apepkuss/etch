@@ -43,7 +43,7 @@ log_error() {
 
 # 测试函数
 test_postgres_connection() {
-    log_info "测试 PostgreSQL 数据库连接..."
+    log_info "🧱 测试 PostgreSQL 数据库连接..."
 
     # 使用 docker compose 命令检查数据库连接
     if docker compose exec -T postgres pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
@@ -56,7 +56,7 @@ test_postgres_connection() {
 }
 
 test_redis_connection() {
-    log_info "测试 Redis 缓存连接..."
+    log_info "🧱 测试 Redis 缓存连接..."
 
     if docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" ping >/dev/null 2>&1; then
         log_success "Redis 缓存连接正常"
@@ -68,7 +68,7 @@ test_redis_connection() {
 }
 
 test_database_tables() {
-    log_info "测试数据库表结构..."
+    log_info "🧱 测试数据库表结构..."
 
     local tables_result=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT table_name FROM information_schema.tables
@@ -98,7 +98,7 @@ test_database_tables() {
 }
 
 test_default_data() {
-    log_info "测试默认数据..."
+    log_info "🧱 测试默认数据..."
 
     # 检查默认管理员用户
     local admin_user=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
@@ -175,7 +175,7 @@ test_default_data() {
 }
 
 test_api_database_operations() {
-    log_info "测试 API Gateway 数据库操作..."
+    log_info "🧱 测试 API Gateway 数据库操作..."
 
     # 获取认证 token
     local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
@@ -217,7 +217,7 @@ test_api_database_operations() {
 }
 
 test_redis_cache_operations() {
-    log_info "测试 Redis 缓存操作..."
+    log_info "🧱 测试 Redis 缓存操作..."
 
     # 设置测试数据
     if docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
@@ -247,7 +247,7 @@ test_redis_cache_operations() {
 }
 
 test_session_storage() {
-    log_info "测试会话存储..."
+    log_info "🧱 测试会话存储..."
 
     # 获取认证 token
     local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
@@ -279,7 +279,7 @@ test_session_storage() {
 }
 
 test_cache_aside_pattern() {
-    log_info "测试 Cache-Aside 模式..."
+    log_info "🧱 测试 Cache-Aside 模式..."
 
     # 模拟缓存操作
     local cache_key="test:devices:list"
@@ -322,7 +322,7 @@ test_cache_aside_pattern() {
 }
 
 test_transaction_rollback() {
-    log_info "测试数据库事务回滚..."
+    log_info "🧱 测试数据库事务回滚..."
 
     # 创建测试表用于事务测试
     docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
