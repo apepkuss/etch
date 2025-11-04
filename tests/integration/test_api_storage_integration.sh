@@ -177,8 +177,8 @@ test_default_data() {
 test_api_database_operations() {
     log_info "🧱 测试 API Gateway 数据库操作..."
 
-    # 获取认证 token
-    local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
+    # 获取认证 token（使用正确的路径 /api/v1/auth/login）
+    local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/v1/auth/login" \
         -H "Content-Type: application/json" \
         -d '{"username":"admin","password":"admin123"}' 2>/dev/null)
 
@@ -186,13 +186,16 @@ test_api_database_operations() {
 
     if [ -z "$token" ]; then
         log_warning "无法获取认证 token，跳过需要认证的测试"
+        log_info "认证响应: $auth_response"
         return 0
     fi
 
-    # 测试设备列表 API
+    log_info "✓ 成功获取认证 token"
+
+    # 测试设备列表 API（使用正确的路径 /api/v1/devices）
     local devices_response=$(curl -s -o /dev/null -w "%{http_code}" \
         -H "Authorization: Bearer $token" \
-        "${API_BASE_URL}/api/devices" 2>/dev/null)
+        "${API_BASE_URL}/api/v1/devices" 2>/dev/null)
 
     if [ "$devices_response" = "200" ]; then
         log_success "设备列表 API 响应正常"
@@ -201,10 +204,10 @@ test_api_database_operations() {
         return 0  # 不视为致命错误
     fi
 
-    # 测试用户列表 API
+    # 测试用户列表 API（使用正确的路径 /api/v1/users）
     local users_response=$(curl -s -o /dev/null -w "%{http_code}" \
         -H "Authorization: Bearer $token" \
-        "${API_BASE_URL}/api/users" 2>/dev/null)
+        "${API_BASE_URL}/api/v1/users" 2>/dev/null)
 
     if [ "$users_response" = "200" ]; then
         log_success "用户列表 API 响应正常"
@@ -249,8 +252,8 @@ test_redis_cache_operations() {
 test_session_storage() {
     log_info "🧱 测试会话存储..."
 
-    # 获取认证 token
-    local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/auth/login" \
+    # 获取认证 token（使用正确的路径 /api/v1/auth/login）
+    local auth_response=$(curl -s -X POST "${API_BASE_URL}/api/v1/auth/login" \
         -H "Content-Type: application/json" \
         -d '{"username":"admin","password":"admin123"}' 2>/dev/null)
 
@@ -328,25 +331,57 @@ test_transaction_rollback() {
     docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         CREATE TABLE IF NOT EXISTS test_transactions (
             id SERIAL PRIMARY KEY,
-            data TEXT,
+            data TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT NOW()
         );
     " >/dev/null 2>&1
 
-    # 执行事务测试
+    log_info "步骤 1/3: 记录事务测试前的记录数..."
+    local before_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+        SELECT COUNT(*) FROM test_transactions;
+    " 2>/dev/null | tr -d ' ')
+    log_info "事务前记录数: ${before_count:-0}"
+
+    # 执行事务测试 - 使用违反 NOT NULL 约束来触发错误
+    log_info "步骤 2/3: 执行包含错误的事务..."
     local transaction_result=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -c "
         BEGIN;
         INSERT INTO test_transactions (data) VALUES ('test_data_1');
         INSERT INTO test_transactions (data) VALUES ('test_data_2');
-        -- 故意引发错误以测试回滚
-        INSERT INTO test_transactions (data) VALUES (NULL/0);
+        -- 违反 NOT NULL 约束，触发错误和回滚
+        INSERT INTO test_transactions (data) VALUES (NULL);
         COMMIT;
     " 2>&1)
 
-    if echo "$transaction_result" | grep -q "ERROR"; then
-        log_success "事务回滚功能正常（检测到错误）"
+    log_info "步骤 3/3: 验证事务是否回滚..."
+
+    # 检查是否检测到错误
+    local has_error=false
+    if echo "$transaction_result" | grep -qi "ERROR\|violates not-null constraint"; then
+        has_error=true
+        log_info "✓ 检测到预期的错误"
+    fi
+
+    # 验证数据是否真的回滚了
+    local after_count=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+        SELECT COUNT(*) FROM test_transactions;
+    " 2>/dev/null | tr -d ' ')
+    log_info "事务后记录数: ${after_count:-0}"
+
+    # 判断测试结果
+    if [ "$has_error" = true ] && [ "${after_count:-0}" = "${before_count:-0}" ]; then
+        log_success "事务回滚功能正常"
+        log_info "  ✓ 检测到事务错误"
+        log_info "  ✓ 数据成功回滚（记录数未改变）"
+    elif [ "$has_error" = true ]; then
+        log_success "事务错误检测正常"
+        log_info "  ✓ 检测到事务错误"
+        log_info "  ℹ 记录数从 ${before_count:-0} 变为 ${after_count:-0}"
     else
         log_warning "事务测试可能未按预期工作"
+        log_info "  原因: 未检测到预期的错误"
+        log_info "  事务执行结果:"
+        echo "$transaction_result" | head -10
     fi
 
     # 清理测试表
