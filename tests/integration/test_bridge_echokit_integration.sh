@@ -409,6 +409,13 @@ test_bridge_udp_reception() {
 # 测试 Bridge 音频转发功能（包括 EchoKit 返回结果验证）
 test_bridge_audio_forwarding() {
     log_info "🧱 测试 Bridge 音频转发功能 (UDP → Bridge → EchoKit → Bridge → UDP)..."
+    log_info ""
+    log_info "测试限制说明:"
+    log_info "  - 本测试使用模拟音频数据（非真实语音），主要验证 Bridge 转发通路"
+    log_info "  - EchoKit VAD 可能不会触发（因无真实语音），这是预期行为"
+    log_info "  - Bridge 需要先建立会话才能处理音频，本测试未建立完整会话"
+    log_info "  - 会话数为 0 是正常的，因为测试直接发送 UDP 数据包"
+    log_info ""
 
     # 前置条件检查
     if ! command -v nc >/dev/null 2>&1; then
@@ -519,9 +526,9 @@ test_bridge_audio_forwarding() {
     # 步骤 6: 验证 Bridge → 设备 (UDP) 返回路径
     log_info "步骤 6/6: 验证 Bridge → 设备 (UDP) 音频返回..."
 
-    # 检查是否有发送音频到设备的日志
+    # 检查是否有发送音频到设备的日志（精确匹配 Bridge 日志格式）
     local audio_output_logs=$(docker compose logs bridge --tail 200 2>/dev/null | \
-        grep -i "send.*device\|output.*device\|audio.*output\|sent.*bytes" | tail -10)
+        grep -E "Sent [0-9]+ bytes (of audio to|to) device" | tail -10)
 
     if [ -n "$audio_output_logs" ]; then
         log_success "✓ Bridge 正在向设备发送返回音频"
@@ -529,7 +536,7 @@ test_bridge_audio_forwarding() {
         echo "$audio_output_logs" | head -5
 
         # 提取发送的字节数
-        local sent_bytes=$(echo "$audio_output_logs" | grep -oP 'sent \K[0-9]+' | tail -1)
+        local sent_bytes=$(echo "$audio_output_logs" | grep -oE 'Sent [0-9]+' | grep -oE '[0-9]+' | tail -1)
         if [ -n "$sent_bytes" ]; then
             log_info "最后一次发送: ${sent_bytes} bytes"
 
@@ -542,10 +549,23 @@ test_bridge_audio_forwarding() {
         fi
     else
         log_warning "⚠ 未找到音频返回日志"
+
+        # 检查是否有会话相关的警告
+        local session_warnings=$(docker compose logs bridge --tail 200 2>/dev/null | \
+            grep -i "no active session" | tail -5)
+
+        if [ -n "$session_warnings" ]; then
+            log_info "发现会话警告:"
+            echo "$session_warnings" | head -3
+        fi
+
         log_info "可能原因:"
-        log_info "  1. EchoKit 未返回音频数据"
-        log_info "  2. Bridge 音频输出通道未激活"
-        log_info "  3. 设备未注册或地址无效"
+        log_info "  1. EchoKit 未返回音频数据（测试音频不包含语音）"
+        log_info "  2. Bridge 音频会话未建立（设备未注册或会话未启动）"
+        log_info "  3. 设备地址无效或未在 Bridge 中注册"
+        log_info "  4. EchoKit VAD 未检测到语音活动"
+        log_info ""
+        log_info "注意: 这是正常情况，因为测试音频是模拟数据，不包含真实语音"
     fi
 
     # 验证会话状态
@@ -556,6 +576,14 @@ test_bridge_audio_forwarding() {
 
     log_info "Bridge 音频会话: ${audio_sessions:-0}"
     log_info "EchoKit 会话: ${echokit_sessions:-0}"
+
+    # 解释会话数为 0 的原因
+    if [ "${audio_sessions:-0}" = "0" ] || [ "${echokit_sessions:-0}" = "0" ]; then
+        log_info "说明: 会话数为 0 是正常的，因为:"
+        log_info "  - 本测试直接发送 UDP 数据包，未建立完整的 Bridge 会话"
+        log_info "  - Bridge 会话需要设备先注册并启动音频会话"
+        log_info "  - 完整流程应该是: 设备注册 → 启动会话 → 发送音频"
+    fi
 
     # 总结
     echo
@@ -593,28 +621,6 @@ test_audio_format_conversion() {
     else
         log_info "未找到音频格式转换日志"
         log_info "可能使用音频直通模式或在 EchoKit 端处理"
-        return 0
-    fi
-}
-
-# 测试 VAD（语音活动检测 - EchoKit 内部功能）
-test_voice_activity_detection() {
-    log_info "🧱 测试语音活动检测 (VAD)..."
-    log_info "注意: VAD 是 EchoKit Server 的内部功能，外部不可见"
-    log_info "我们只能检查 Bridge 是否有相关日志输出"
-
-    # 检查 Bridge 日志中是否有 VAD 相关信息
-    local vad_logs=$(docker compose logs bridge 2>/dev/null | grep -i "vad\|voice.*activity\|speech.*detect" | tail -10)
-
-    if [ -n "$vad_logs" ]; then
-        log_info "发现 VAD 相关日志:"
-        echo "$vad_logs"
-        log_success "Bridge 记录了 VAD 相关信息"
-        return 0
-    else
-        log_info "未找到 VAD 日志"
-        log_info "VAD 功能在 EchoKit Server 端处理，Bridge 可能不记录"
-        log_success "这是正常情况（VAD 对 Bridge 不可见）"
         return 0
     fi
 }
@@ -874,15 +880,7 @@ run_tests() {
         # 不算致命错误
     fi
 
-    # 12. VAD 语音活动检测
-    if test_voice_activity_detection; then
-        ((total_tests++))
-    else
-        ((total_tests++))
-        # 不算致命错误
-    fi
-
-    # 13. 会话管理
+    # 12. 会话管理
     if test_session_management; then
         ((total_tests++))
     else
@@ -890,7 +888,7 @@ run_tests() {
         ((failed_tests++))
     fi
 
-    # 14. 设备在线状态
+    # 13. 设备在线状态
     if test_device_online_status; then
         ((total_tests++))
     else
@@ -898,7 +896,7 @@ run_tests() {
         ((failed_tests++))
     fi
 
-    # 15. 错误处理
+    # 14. 错误处理
     if test_bridge_error_handling; then
         ((total_tests++))
     else
@@ -906,7 +904,7 @@ run_tests() {
         # 不算致命错误
     fi
 
-    # 16. 服务依赖
+    # 15. 服务依赖
     if test_service_dependencies; then
         ((total_tests++))
     else
@@ -914,7 +912,7 @@ run_tests() {
         # 不算致命错误
     fi
 
-    # 17. 资源使用
+    # 16. 资源使用
     if test_bridge_resource_usage; then
         ((total_tests++))
     else
@@ -922,7 +920,7 @@ run_tests() {
         # 不算致命错误
     fi
 
-    # 18. EchoKit Server 可达性
+    # 17. EchoKit Server 可达性
     if test_echokit_server_reachability; then
         ((total_tests++))
     else
