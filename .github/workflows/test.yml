@@ -250,7 +250,7 @@ jobs:
           # 使用外部 EchoKit 服务 (indie.echokit.dev)
           echo "✅ 使用外部 EchoKit Server: wss://indie.echokit.dev/ws/"
           echo "ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/" >> $GITHUB_ENV
-          
+
           # 验证外部服务可达性
           if curl -f -k -s --connect-timeout 10 https://indie.echokit.dev/ > /dev/null 2>&1; then
             echo "✅ 外部 EchoKit Server 可达"
@@ -373,10 +373,9 @@ jobs:
           # 启动应用服务，并传递 EchoKit URL 环境变量
           echo "2️⃣ 启动应用服务 (API Gateway, Bridge, Web Management)..."
           echo "Bridge 将使用外部 EchoKit URL: $ECHOKIT_WEBSOCKET_URL"
-          
+
           ECHOKIT_WEBSOCKET_URL="$ECHOKIT_WEBSOCKET_URL" \
-          docker compose -f docker-compose.yml -f docker-compose.external-echokit.yml \
-            up -d api-gateway bridge web-management
+          docker compose up -d api-gateway bridge web-management
 
           # 等待应用服务启动
           echo "等待应用服务基本启动完成..."
