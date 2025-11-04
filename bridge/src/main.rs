@@ -117,7 +117,8 @@ async fn main() -> Result<()> {
     ).await?);
 
     // 创建 MQTT 客户端
-    let mqtt_client = Arc::new(mqtt_client::BridgeMqttClient::new(mqtt_config)?);
+    let (mqtt_client, mqtt_event_loop) = mqtt_client::BridgeMqttClient::new(mqtt_config)?;
+    let mqtt_client_arc = Arc::new(mqtt_client);
 
     // 创建 Bridge 服务
     let bridge_service = BridgeService {
@@ -125,10 +126,35 @@ async fn main() -> Result<()> {
         echokit_manager: echokit_manager.clone(),
         audio_processor: audio_processor.clone(),
         udp_server: udp_server.clone(),
-        mqtt_client: mqtt_client.clone(),
+        mqtt_client: mqtt_client_arc.clone(),
         active_sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
         device_audio_output: audio_output_tx,
     };
+
+    // 启动 MQTT 客户端 (需要消费 mqtt_client，使用 Arc::try_unwrap 或者重新设计)
+    // 由于 mqtt_client 已在 Arc 中，我们需要 clone 一个新的客户端实例
+    // 或者重新设计架构
+
+    // 简单方案：重新创建一个 MQTT 客户端用于启动事件循环
+    let mqtt_config_for_start = echo_shared::mqtt::MqttConfig {
+        client_id: format!("echo-bridge-{}", uuid::Uuid::new_v4()),
+        broker_host: config.mqtt_broker_host.clone(),
+        broker_port: config.mqtt_broker_port,
+        username: None,
+        password: None,
+        keep_alive: 60,
+        clean_session: true,
+        max_reconnect_attempts: 5,
+        reconnect_interval_ms: 5000,
+    };
+    let (mqtt_client_for_start, _) = mqtt_client::BridgeMqttClient::new(mqtt_config_for_start)?;
+
+    info!("Starting MQTT client event loop...");
+    tokio::spawn(async move {
+        if let Err(e) = mqtt_client_for_start.start(mqtt_event_loop).await {
+            error!("MQTT client error: {}", e);
+        }
+    });
 
     // 启动各个组件
     bridge_service.start(audio_output_rx).await?;
@@ -183,17 +209,11 @@ async fn load_config() -> Result<BridgeConfig> {
 
 impl BridgeService {
     // 启动 Bridge 服务
-    async fn start(&self, audio_output_rx: mpsc::UnboundedReceiver<(String, Vec<u8>)>) -> Result<()> {
-        // 启动 MQTT 客户端
-        info!("Starting MQTT client...");
-        self.mqtt_client.start().await
-            .with_context(|| "Failed to start MQTT client")?;
-
-        // 订阅 MQTT 主题 (暂时注释以专注于EchoKit连接测试)
-        // self.mqtt_client.subscribe(&TopicFilter::all_device_config()).await?;
-        // self.mqtt_client.subscribe(&TopicFilter::all_device_control()).await?;
-
-        info!("MQTT client started (subscriptions temporarily disabled for EchoKit testing)");
+    async fn start(
+        &self,
+        audio_output_rx: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
+    ) -> Result<()> {
+        // MQTT 客户端已在 main 中启动
 
         // 启动 EchoKit 连接管理器
         self.echokit_manager.start().await

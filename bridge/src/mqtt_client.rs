@@ -5,7 +5,7 @@ use echo_shared::{
 };
 use echo_shared::mqtt::{MqttConfig, MqttMessage};
 use echo_shared::utils::now_utc;
-use rumqttc::{AsyncClient, Event, Incoming, Outgoing, Packet, QoS as RumqttQoS};
+use rumqttc::{AsyncClient, Event, EventLoop, Incoming, Outgoing, Packet, QoS as RumqttQoS};
 use std::time::Duration as StdDuration;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -33,7 +33,7 @@ pub struct DeviceInfo {
 }
 
 impl BridgeMqttClient {
-    pub fn new(config: MqttConfig) -> Result<Self> {
+    pub fn new(config: MqttConfig) -> Result<(Self, EventLoop)> {
         let mut mqtt_options = rumqttc::MqttOptions::new(
             config.client_id.clone(),
             &config.broker_host,
@@ -49,11 +49,11 @@ impl BridgeMqttClient {
         mqtt_options.set_keep_alive(StdDuration::from_secs(config.keep_alive));
         mqtt_options.set_clean_session(config.clean_session);
 
-        let (client, _) = AsyncClient::new(mqtt_options, 10);
+        let (client, event_loop) = AsyncClient::new(mqtt_options, 10);
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        Ok(Self {
+        let mqtt_client = Self {
             client,
             config,
             message_sender: tx,
@@ -61,18 +61,28 @@ impl BridgeMqttClient {
             registered_devices: Arc::new(RwLock::new(std::collections::HashMap::new())),
             is_connected: Arc::new(RwLock::new(false)),
             reconnect_count: Arc::new(RwLock::new(0)),
-        })
+        };
+
+        Ok((mqtt_client, event_loop))
     }
 
     // 启动 MQTT 客户端
-    pub async fn start(&self) -> Result<()> {
+    pub async fn start(self, mut event_loop: EventLoop) -> Result<()> {
         info!("Starting MQTT client for Bridge service");
+
+        let client = self.client.clone();
+        let message_sender = self.message_sender.clone();
+        let is_connected = self.is_connected.clone();
 
         // 启动消息处理任务
         self.start_message_processor().await?;
 
-        // 启动连接管理任务
-        self.start_connection_manager().await?;
+        // 启动事件循环任务
+        tokio::spawn(async move {
+            if let Err(e) = Self::run_event_loop(&client, &mut event_loop, &message_sender, &is_connected).await {
+                error!("MQTT event loop terminated with error: {}", e);
+            }
+        });
 
         // 启动心跳任务
         self.start_heartbeat_task().await?;
@@ -234,55 +244,93 @@ impl BridgeMqttClient {
         Ok(())
     }
 
-    // 启动连接管理器
-    async fn start_connection_manager(&self) -> Result<()> {
-        let client = self.client.clone();
-        let config = self.config.clone();
-        let message_sender = self.message_sender.clone();
-        let is_connected = self.is_connected.clone();
-        let reconnect_count = self.reconnect_count.clone();
+    // 启动连接管理器 - 已废弃，使用 run_event_loop 替代
+    // 保留此函数签名以兼容旧代码，实际不执行任何操作
+    #[allow(dead_code)]
+    async fn start_connection_manager_deprecated(&self) -> Result<()> {
+        warn!("start_connection_manager is deprecated, event loop is now managed in start()");
+        Ok(())
+    }
 
-        tokio::spawn(async move {
-            let mut reconnect_attempts = 0;
+    // 运行事件循环
+    async fn run_event_loop(
+        client: &AsyncClient,
+        event_loop: &mut EventLoop,
+        message_sender: &mpsc::UnboundedSender<MqttMessage>,
+        is_connected: &Arc<RwLock<bool>>,
+    ) -> Result<()> {
+        info!("Starting MQTT event loop");
 
-            loop {
-                match Self::run_connection_loop(
-                    &client,
-                    &message_sender,
-                    &is_connected,
-                ).await {
-                    Ok(_) => {
-                        info!("MQTT connection completed normally");
-                        break;
-                    }
-                    Err(e) => {
-                        error!("MQTT connection error: {}", e);
-                        *is_connected.write().await = false;
+        loop {
+            match event_loop.poll().await {
+                Ok(Event::Incoming(incoming)) => {
+                    match incoming {
+                        Incoming::ConnAck(connack) => {
+                            info!("MQTT connection established: {:?}", connack);
+                            *is_connected.write().await = true;
 
-                        if reconnect_attempts < config.max_reconnect_attempts {
-                            reconnect_attempts += 1;
-                            *reconnect_count.write().await = reconnect_attempts;
+                            // 订阅必要的主题
+                            if let Err(e) = Self::subscribe_default_topics(client).await {
+                                error!("Failed to subscribe to default topics: {}", e);
+                            }
+                        }
+                        Incoming::Publish(publish) => {
+                            debug!("Received MQTT message on topic: {}", publish.topic);
 
-                            warn!(
-                                "Attempting to reconnect to MQTT broker (attempt {}/{}), retrying in {}ms",
-                                reconnect_attempts,
-                                config.max_reconnect_attempts,
-                                config.reconnect_interval_ms
-                            );
-
-                            tokio::time::sleep(
-                                tokio::time::Duration::from_millis(config.reconnect_interval_ms)
-                            ).await;
-                        } else {
-                            error!("Max MQTT reconnect attempts reached, giving up");
-                            break;
+                            // 解析并发送消息到处理器
+                            match Self::parse_incoming_message(publish) {
+                                Ok(message) => {
+                                    if let Err(e) = message_sender.send(message) {
+                                        error!("Failed to send message to processor: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to parse MQTT message: {}", e);
+                                }
+                            }
+                        }
+                        Incoming::SubAck(suback) => {
+                            debug!("Subscription acknowledged: {:?}", suback);
+                        }
+                        Incoming::PubAck(puback) => {
+                            debug!("Publish acknowledged: {:?}", puback);
+                        }
+                        Incoming::PingResp => {
+                            debug!("Ping response received");
+                        }
+                        Incoming::Disconnect => {
+                            warn!("MQTT broker initiated disconnect");
+                            *is_connected.write().await = false;
+                            return Err(anyhow::anyhow!("MQTT broker disconnected"));
+                        }
+                        _ => {
+                            debug!("Received other MQTT incoming event");
                         }
                     }
                 }
+                Ok(Event::Outgoing(outgoing)) => {
+                    match outgoing {
+                        Outgoing::Publish(_) => {
+                            debug!("Message published to MQTT broker");
+                        }
+                        Outgoing::Subscribe(_) => {
+                            debug!("Subscription request sent");
+                        }
+                        Outgoing::PingReq => {
+                            debug!("Ping request sent");
+                        }
+                        _ => {
+                            debug!("Other outgoing event");
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("MQTT connection error: {}", e);
+                    *is_connected.write().await = false;
+                    return Err(anyhow::anyhow!("MQTT event loop error: {}", e));
+                }
             }
-        });
-
-        Ok(())
+        }
     }
 
     // 启动心跳任务
@@ -352,18 +400,108 @@ impl BridgeMqttClient {
     // 运行连接循环
     async fn run_connection_loop(
         client: &AsyncClient,
+        mut event_loop: EventLoop,
         message_sender: &mpsc::UnboundedSender<MqttMessage>,
         is_connected: &Arc<RwLock<bool>>,
-    ) -> Result<()> {
-        // TODO: 实现MQTT事件循环 (Phase 3)
-        // 暂时简化，避免rumqttc API兼容性问题
-        info!("MQTT event loop will be implemented in Phase 3");
+    ) -> Result<EventLoop, (anyhow::Error, EventLoop)> {
+        info!("Starting MQTT event loop");
 
-        // 保持连接检查的简化版本
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            debug!("MQTT connection check - placeholder for Phase 3 implementation");
+            match event_loop.poll().await {
+                Ok(Event::Incoming(incoming)) => {
+                    match incoming {
+                        Incoming::ConnAck(connack) => {
+                            info!("MQTT connection established: {:?}", connack);
+                            *is_connected.write().await = true;
+
+                            // 订阅必要的主题
+                            if let Err(e) = Self::subscribe_default_topics(client).await {
+                                error!("Failed to subscribe to default topics: {}", e);
+                            }
+                        }
+                        Incoming::Publish(publish) => {
+                            debug!("Received MQTT message on topic: {}", publish.topic);
+
+                            // 解析并发送消息到处理器
+                            match Self::parse_incoming_message(publish) {
+                                Ok(message) => {
+                                    if let Err(e) = message_sender.send(message) {
+                                        error!("Failed to send message to processor: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to parse MQTT message: {}", e);
+                                }
+                            }
+                        }
+                        Incoming::SubAck(suback) => {
+                            debug!("Subscription acknowledged: {:?}", suback);
+                        }
+                        Incoming::PubAck(puback) => {
+                            debug!("Publish acknowledged: {:?}", puback);
+                        }
+                        Incoming::PingResp => {
+                            debug!("Ping response received");
+                        }
+                        Incoming::Disconnect => {
+                            warn!("MQTT broker initiated disconnect");
+                            *is_connected.write().await = false;
+                            return Err((anyhow::anyhow!("MQTT broker disconnected"), event_loop));
+                        }
+                        _ => {
+                            debug!("Received other MQTT incoming event: {:?}", incoming);
+                        }
+                    }
+                }
+                Ok(Event::Outgoing(outgoing)) => {
+                    match outgoing {
+                        Outgoing::Publish(_) => {
+                            debug!("Message published to MQTT broker");
+                        }
+                        Outgoing::Subscribe(_) => {
+                            debug!("Subscription request sent");
+                        }
+                        Outgoing::PingReq => {
+                            debug!("Ping request sent");
+                        }
+                        _ => {
+                            debug!("Other outgoing event: {:?}", outgoing);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("MQTT connection error: {}", e);
+                    *is_connected.write().await = false;
+                    return Err((anyhow::anyhow!("MQTT event loop error: {}", e), event_loop));
+                }
+            }
         }
+    }
+
+    // 订阅默认主题
+    async fn subscribe_default_topics(client: &AsyncClient) -> Result<()> {
+        info!("Subscribing to default MQTT topics");
+
+        // 订阅设备配置主题（所有设备）
+        client
+            .subscribe("echo/device/+/config", RumqttQoS::AtLeastOnce)
+            .await
+            .with_context(|| "Failed to subscribe to device config topic")?;
+
+        // 订阅设备控制主题（所有设备）
+        client
+            .subscribe("echo/device/+/control", RumqttQoS::AtLeastOnce)
+            .await
+            .with_context(|| "Failed to subscribe to device control topic")?;
+
+        // 订阅系统状态主题
+        client
+            .subscribe("echo/system/status", RumqttQoS::AtMostOnce)
+            .await
+            .with_context(|| "Failed to subscribe to system status topic")?;
+
+        info!("Successfully subscribed to default MQTT topics");
+        Ok(())
     }
 
     // 解析接收到的消息
