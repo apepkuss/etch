@@ -13,8 +13,9 @@ NC='\033[0m' # No Color
 # 配置
 BRIDGE_BASE_URL="http://localhost:18082"
 BRIDGE_WS_URL="ws://localhost:18082"
-ECHOKIT_BASE_URL="https://eu.echokit.dev"
-ECHOKIT_WS_URL="wss://eu.echokit.dev/ws"
+# 生成唯一的 visitor ID 用于 EchoKit WebSocket 连接
+VISITOR_ID="test-$(date +%s)-$$"
+ECHOKIT_WS_URL="wss://indie.echokit.dev/ws/${VISITOR_ID}"
 UDP_PORT="18083"
 MQTT_BROKER="localhost"
 MQTT_PORT="10039"
@@ -368,10 +369,10 @@ test_udp_audio_upload() {
         log_success "UDP 音频数据发送成功"
 
         # 等待 Bridge 处理
-        sleep 2
+        sleep 5
 
         # 检查 Bridge 日志中是否有音频接收记录
-        local bridge_logs=$(docker compose logs bridge --tail 50 2>/dev/null | grep -i "audio\|udp\|received\|packet")
+        local bridge_logs=$(docker compose logs bridge --tail 100 2>/dev/null | grep -i "audio\|udp\|received\|packet")
 
         if [ -n "$bridge_logs" ]; then
             log_info "Bridge 音频处理日志:"
@@ -676,7 +677,7 @@ test_echokit_server_reachability() {
 run_tests() {
     log_info "开始 Bridge 与 EchoKit Server 集成测试"
     log_info "Bridge 服务: ${BRIDGE_BASE_URL}"
-    log_info "EchoKit Server: ${ECHOKIT_BASE_URL}"
+    log_info "EchoKit WebSocket: ${ECHOKIT_WS_URL}"
     log_info "MQTT Broker: ${MQTT_BROKER}:${MQTT_PORT}"
     log_info "UDP 端口: ${UDP_PORT}"
 
@@ -891,7 +892,8 @@ show_help() {
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
     echo "  -b, --bridge-url URL    Bridge 服务 URL (默认: http://localhost:18082)"
-    echo "  -e, --echokit-url URL   EchoKit Server URL (默认: https://eu.echokit.dev)"
+    echo "  -e, --echokit-url URL   EchoKit WebSocket URL (默认: 自动生成 wss://indie.echokit.dev/ws/{visitor-id})"
+    echo "                          注意: 必须包含完整路径和 visitorId"
     echo "  -u, --udp-port PORT     UDP 端口 (默认: 18083)"
     echo "  -m, --mqtt-host HOST    MQTT Broker 主机 (默认: localhost)"
     echo "  --mqtt-port PORT        MQTT 端口 (默认: 10039)"
@@ -900,6 +902,7 @@ show_help() {
     echo "示例:"
     echo "  $0"
     echo "  $0 --bridge-url http://localhost:18082"
+    echo "  $0 --echokit-url wss://indie.echokit.dev/ws/my-unique-id"
     echo ""
 }
 
@@ -915,7 +918,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -e|--echokit-url)
-            ECHOKIT_BASE_URL="$2"
+            ECHOKIT_WS_URL="$2"
             shift 2
             ;;
         -u|--udp-port)

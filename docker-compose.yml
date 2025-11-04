@@ -88,7 +88,9 @@ services:
       DATABASE_URL: postgres://echo_user:echo_password@postgres:5432/echo_db
       REDIS_URL: redis://:redis_password@redis:6379
       # EchoKit Server 配置 (使用外部服务)
-      ECHOKIT_WEBSOCKET_URL: ${ECHOKIT_WEBSOCKET_URL:-wss://indie.echokit.dev/ws/}
+      # 注意: 需要包含完整的 WebSocket URL (含 visitorId)
+      # 格式: wss://indie.echokit.dev/ws/{your-visitor-id}
+      ECHOKIT_WEBSOCKET_URL: ${ECHOKIT_WEBSOCKET_URL:-wss://indie.echokit.dev/ws/ci-test-visitor}
       ECHOKET_API_BASE_URL: ${ECHOKIT_API_BASE_URL:-https://indie.echokit.dev}
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883

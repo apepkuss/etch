@@ -248,8 +248,13 @@ jobs:
           echo "=== 配置外部 EchoKit Server ==="
 
           # 使用外部 EchoKit 服务 (indie.echokit.dev)
-          echo "✅ 使用外部 EchoKit Server: wss://indie.echokit.dev/ws/"
-          echo "ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/" >> $GITHUB_ENV
+          # 生成唯一的 visitor ID (使用 GitHub Run ID 确保唯一性)
+          VISITOR_ID="github-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ECHOKIT_URL="wss://indie.echokit.dev/ws/${VISITOR_ID}"
+
+          echo "✅ 使用外部 EchoKit Server: ${ECHOKIT_URL}"
+          echo "✅ Visitor ID: ${VISITOR_ID}"
+          echo "ECHOKIT_WEBSOCKET_URL=${ECHOKIT_URL}" >> $GITHUB_ENV
 
       - name: Configure docker-compose
         run: |
