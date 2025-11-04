@@ -251,13 +251,6 @@ jobs:
           echo "✅ 使用外部 EchoKit Server: wss://indie.echokit.dev/ws/"
           echo "ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/" >> $GITHUB_ENV
 
-          # 验证外部服务可达性
-          if curl -f -k -s --connect-timeout 10 https://indie.echokit.dev/ > /dev/null 2>&1; then
-            echo "✅ 外部 EchoKit Server 可达"
-          else
-            echo "⚠️ 警告: 外部 EchoKit Server 当前不可达，但将继续测试"
-          fi
-
       - name: Configure docker-compose
         run: |
           echo "=== 配置 docker-compose 端口映射 ==="

@@ -37,7 +37,7 @@ EXIT_CODE=0
 # 默认端口配置（支持命令行参数覆盖）
 API_BASE_URL="http://localhost:18080"
 WEB_BASE_URL="http://localhost:18084"
-ECHOKIT_URL="https://eu.echokit.dev"
+ECHOKIT_WS_URL="wss://indie.echokit.dev/ws/"
 
 # 测试结果统计
 TOTAL_SUITES=0
@@ -209,7 +209,8 @@ cleanup_test_environment() {
         log_info "访问地址:"
         log_info "  Web管理界面: $WEB_BASE_URL"
         log_info "  API Gateway:  $API_BASE_URL"
-        log_info "  EchoKit Server: $ECHOKIT_URL"
+        log_info "  Bridge: http://localhost:18082"
+        log_info "  EchoKit WebSocket: $ECHOKIT_WS_URL"
         log_info "要停止服务，请运行: docker compose down"
     else
         log_info "停止所有服务..."
@@ -228,7 +229,7 @@ show_help() {
     echo "  -h, --help              显示帮助信息"
     echo "  -u, --api-url URL       API Gateway URL (默认: $API_BASE_URL)"
     echo "  -w, --web-url URL       Web 界面 URL (默认: $WEB_BASE_URL)"
-    echo "  -e, --echokit-url URL   EchoKit Server URL (默认: $ECHOKIT_URL)"
+    echo "  -e, --echokit-url URL   EchoKit WebSocket URL (默认: $ECHOKIT_WS_URL)"
     echo "  -k, --keep-services     测试完成后保留服务运行"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 600)"
     echo "  --skip-deployment       跳过服务部署步骤"
@@ -263,7 +264,7 @@ main() {
                 shift 2
                 ;;
             -e|--echokit-url)
-                ECHOKIT_URL="$2"
+                ECHOKIT_WS_URL="$2"
                 shift 2
                 ;;
             -k|--keep-services)

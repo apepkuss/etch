@@ -62,17 +62,10 @@ wait_for_services() {
             mqtt_up=true
         fi
 
-        # Bridge 服务必须启动，但 EchoKit Server 是外部服务，可能不可达
+        # Bridge 服务必须启动，EchoKit Server 是外部托管服务（假定可用）
         if [ "$bridge_up" = true ] && [ "$mqtt_up" = true ]; then
             log_success "Bridge 和 MQTT 服务已就绪"
-
-            # 检查 EchoKit Server（外部服务，不强制要求）
-            if curl -s "${ECHOKIT_BASE_URL}" >/dev/null 2>&1; then
-                log_success "EchoKit Server 外部服务可访问"
-            else
-                log_warning "EchoKit Server 外部服务暂时不可达（将跳过需要 EchoKit 的测试）"
-            fi
-
+            log_info "使用外部 EchoKit Server (WebSocket only): ${ECHOKIT_WS_URL}"
             return 0
         fi
 
@@ -655,19 +648,26 @@ test_bridge_resource_usage() {
     fi
 }
 
-# 测试 EchoKit Server 可达性（外部服务）
+# 测试 EchoKit Server 连接状态（通过 Bridge 统计信息）
 test_echokit_server_reachability() {
-    log_info "测试 EchoKit Server 外部服务可达性..."
+    log_info "测试 EchoKit Server 连接状态（通过 Bridge）..."
 
-    # 尝试访问 EchoKit Server
-    local echokit_response=$(curl -s -o /dev/null -w "%{http_code}" "${ECHOKIT_BASE_URL}" 2>/dev/null)
+    # 通过 Bridge 统计信息检查 EchoKit 连接状态
+    local stats_response=$(curl -s "${BRIDGE_BASE_URL}/stats" 2>/dev/null)
 
-    if [ "$echokit_response" = "200" ] || [ "$echokit_response" = "301" ] || [ "$echokit_response" = "302" ]; then
-        log_success "EchoKit Server 外部服务可达 (HTTP $echokit_response)"
-        return 0
+    if [ -n "$stats_response" ]; then
+        local echokit_connected=$(echo "$stats_response" | grep -o '"echokit_connected":[^,}]*' | cut -d':' -f2)
+
+        if [ "$echokit_connected" = "true" ]; then
+            log_success "EchoKit Server WebSocket 连接正常"
+            return 0
+        else
+            log_warning "EchoKit Server 当前未连接"
+            log_info "Bridge 会在需要时自动建立 WebSocket 连接"
+            return 0
+        fi
     else
-        log_warning "EchoKit Server 外部服务暂时不可达 (HTTP $echokit_response)"
-        log_info "这不影响 Bridge 服务的基本功能测试"
+        log_warning "无法获取 Bridge 统计信息"
         return 0
     fi
 }
