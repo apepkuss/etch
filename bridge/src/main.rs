@@ -1,7 +1,9 @@
 mod echokit_client;
+mod echokit;
 mod audio_processor;
 mod udp_server;
 mod mqtt_client;
+mod websocket;
 
 use anyhow::{Context, Result};
 use echo_shared::{
@@ -52,7 +54,13 @@ struct BridgeService {
     udp_server: Arc<udp_server::UdpAudioServer>,
     mqtt_client: Arc<mqtt_client::BridgeMqttClient>,
     active_sessions: Arc<RwLock<std::collections::HashMap<String, SessionInfo>>>,
-    device_audio_output: mpsc::UnboundedSender<(String, Vec<u8>)>, // (device_id, audio_data)
+    device_audio_output: mpsc::UnboundedSender<(String, Vec<u8>)>,
+    // WebSocket 组件
+    connection_manager: Arc<websocket::connection_manager::DeviceConnectionManager>,
+    session_manager: Arc<websocket::session_manager::SessionManager>,
+    heartbeat_monitor: Arc<websocket::heartbeat::HeartbeatMonitor>,
+    flow_controller: Arc<websocket::flow_control::FlowController>,
+    echokit_adapter: Arc<echokit::EchoKitSessionAdapter>,
 }
 
 // 会话信息
@@ -99,9 +107,13 @@ async fn main() -> Result<()> {
         reconnect_interval_ms: 5000,
     };
 
-    // 创建 EchoKit 连接管理器
-    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new(
+    // 创建音频回调通道（用于 EchoKit -> Adapter -> Device 的音频路由）
+    let (audio_callback_tx, audio_callback_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // 创建 EchoKit 连接管理器（带音频回调）
+    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_audio_callback(
         config.echokit_websocket_url.clone(),
+        audio_callback_tx,
     ));
 
     // 创建音频处理器
@@ -120,6 +132,35 @@ async fn main() -> Result<()> {
     let (mqtt_client, mqtt_event_loop) = mqtt_client::BridgeMqttClient::new(mqtt_config)?;
     let mqtt_client_arc = Arc::new(mqtt_client);
 
+    // 创建 WebSocket 组件
+    let connection_manager = Arc::new(websocket::connection_manager::DeviceConnectionManager::new());
+    let session_manager = Arc::new(websocket::session_manager::SessionManager::new());
+
+    // 创建 EchoKit 适配器（带音频接收器）
+    let echokit_adapter = Arc::new(echokit::EchoKitSessionAdapter::new(
+        echokit_manager.get_client(),
+        connection_manager.clone(),
+        audio_callback_rx,
+    ));
+
+    // 启动 EchoKit 音频接收器
+    let echokit_adapter_clone = echokit_adapter.clone();
+    tokio::spawn(async move {
+        echokit_adapter_clone.start_audio_receiver().await;
+    });
+
+    // 创建心跳监控
+    let heartbeat_config = websocket::heartbeat::HeartbeatConfig::default();
+    let heartbeat_monitor = Arc::new(websocket::heartbeat::HeartbeatMonitor::new(
+        connection_manager.clone(),
+        session_manager.clone(),
+        heartbeat_config,
+    ));
+
+    // 创建流控管理器
+    let flow_config = websocket::flow_control::FlowControlConfig::default();
+    let flow_controller = Arc::new(websocket::flow_control::FlowController::new(flow_config));
+
     // 创建 Bridge 服务
     let bridge_service = BridgeService {
         config: config.clone(),
@@ -129,6 +170,11 @@ async fn main() -> Result<()> {
         mqtt_client: mqtt_client_arc.clone(),
         active_sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
         device_audio_output: audio_output_tx,
+        connection_manager: connection_manager.clone(),
+        session_manager: session_manager.clone(),
+        heartbeat_monitor: heartbeat_monitor.clone(),
+        flow_controller: flow_controller.clone(),
+        echokit_adapter: echokit_adapter.clone(),
     };
 
     // 启动 MQTT 事件循环
@@ -228,6 +274,18 @@ impl BridgeService {
         // 启动会话超时检查
         self.start_session_timeout_check().await?;
 
+        // 启动心跳监控
+        let heartbeat_monitor = self.heartbeat_monitor.clone();
+        tokio::spawn(async move {
+            heartbeat_monitor.start().await;
+        });
+
+        // 启动流控管理器
+        let flow_controller = self.flow_controller.clone();
+        tokio::spawn(async move {
+            flow_controller.start().await;
+        });
+
         // 启动健康检查服务
         self.start_health_check_service().await?;
 
@@ -296,11 +354,16 @@ impl BridgeService {
     // 启动健康检查服务
     async fn start_health_check_service(&self) -> Result<()> {
         let bind_address = "0.0.0.0:8082".to_string(); // 健康检查端口
+        let ws_bind_address = "0.0.0.0:10031".to_string(); // WebSocket 端口
         let echokit_manager = self.echokit_manager.clone();
         let udp_server = self.udp_server.clone();
         let active_sessions = self.active_sessions.clone();
         let audio_processor = self.audio_processor.clone();
+        let connection_manager = self.connection_manager.clone();
+        let session_manager = self.session_manager.clone();
+        let echokit_adapter = self.echokit_adapter.clone();
 
+        // 启动健康检查 HTTP 服务
         tokio::spawn(async move {
             use axum::{
                 extract::State,
@@ -324,6 +387,32 @@ impl BridgeService {
             let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
             if let Err(e) = axum::serve(listener, app).await {
                 error!("Health check service error: {}", e);
+            }
+        });
+
+        // 启动 WebSocket 服务器
+        tokio::spawn(async move {
+            use axum::{
+                extract::State,
+                routing::get,
+                Router,
+            };
+
+            let ws_state = websocket::audio_handler::AppState {
+                connection_manager,
+                session_manager,
+                echokit_adapter,
+            };
+
+            let app = Router::new()
+                .route("/ws/audio", get(websocket::audio_handler::websocket_handler))
+                .with_state(ws_state);
+
+            info!("WebSocket server listening on: {}", ws_bind_address);
+
+            let listener = tokio::net::TcpListener::bind(&ws_bind_address).await.unwrap();
+            if let Err(e) = axum::serve(listener, app).await {
+                error!("WebSocket server error: {}", e);
             }
         });
 

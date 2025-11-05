@@ -23,6 +23,7 @@ pub struct EchoKitClient {
     message_sender: mpsc::UnboundedSender<EchoKitClientMessage>,
     message_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<EchoKitClientMessage>>>>,
     active_sessions: Arc<RwLock<HashMap<String, String>>>, // session_id -> device_id
+    audio_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, audio_data)
 }
 
 impl EchoKitClient {
@@ -37,6 +38,26 @@ impl EchoKitClient {
             message_sender: tx,
             message_receiver: Arc::new(RwLock::new(Some(rx))),
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
+            audio_callback: None,
+        }
+    }
+
+    /// Create a new EchoKitClient with audio callback support
+    pub fn new_with_audio_callback(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+    ) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        Self {
+            websocket_url,
+            ws_stream: Arc::new(RwLock::new(None)),
+            is_connected: Arc::new(RwLock::new(false)),
+            service_status: Arc::new(RwLock::new(None)),
+            message_sender: tx,
+            message_receiver: Arc::new(RwLock::new(Some(rx))),
+            active_sessions: Arc::new(RwLock::new(HashMap::new())),
+            audio_callback: Some(audio_callback),
         }
     }
 
@@ -238,6 +259,7 @@ impl EchoKitClient {
         let is_connected = self.is_connected.clone();
         let service_status = self.service_status.clone();
         let active_sessions = self.active_sessions.clone();
+        let audio_callback = self.audio_callback.clone();
 
         // 为每个连接创建独立的消息通道
         let (tx, mut rx) = mpsc::unbounded_channel::<EchoKitClientMessage>();
@@ -272,6 +294,7 @@ impl EchoKitClient {
                                     data,
                                     &service_status,
                                     &active_sessions,
+                                    &audio_callback,
                                 ).await {
                                     error!("Error handling binary audio data: {}", e);
                                 }
@@ -313,7 +336,7 @@ impl EchoKitClient {
                         }
                     }
 
-                    
+
                     // 定期心跳
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
                         debug!("Sending heartbeat to EchoKit Server");
@@ -447,6 +470,18 @@ impl EchoKitConnectionManager {
         }
     }
 
+    /// Create a new connection manager with audio callback support
+    pub fn new_with_audio_callback(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+    ) -> Self {
+        Self {
+            client: Arc::new(EchoKitClient::new_with_audio_callback(websocket_url, audio_callback)),
+            reconnect_interval: tokio::time::Duration::from_secs(5),
+            max_reconnect_attempts: 10,
+        }
+    }
+
     // 启动连接管理器
     pub async fn start(&self) -> Result<()> {
         let client = self.client.clone();
@@ -501,7 +536,8 @@ impl EchoKitClient {
     async fn handle_binary_audio_data(
         data: Vec<u8>,
         _service_status: &Arc<RwLock<Option<EchoKitServiceStatus>>>,
-        _active_sessions: &Arc<RwLock<HashMap<String, String>>>,
+        active_sessions: &Arc<RwLock<HashMap<String, String>>>,
+        audio_callback: &Option<mpsc::UnboundedSender<(String, Vec<u8>)>>,
     ) -> Result<()> {
         debug!("Processing binary audio data: {} bytes", data.len());
 
@@ -525,10 +561,20 @@ impl EchoKitClient {
 
         debug!("Detected audio format: {}", audio_format);
 
-        // TODO: 实际处理音频数据，例如：
-        // 1. 解码音频格式
-        // 2. 转换为需要的格式
-        // 3. 发送到相应的设备或处理流程
+        // 如果有音频回调，将音频数据路由到相应的会话
+        if let Some(callback) = audio_callback {
+            // 获取所有活跃会话（这里需要从数据中确定session_id）
+            // 由于当前没有在二进制数据中包含session_id，我们需要从活跃会话中找到
+            // 这是一个临时方案，实际应该在数据中包含session_id
+            let sessions = active_sessions.read().await;
+
+            // 暂时发送给所有活跃会话（需要优化）
+            for (session_id, _device_id) in sessions.iter() {
+                if let Err(e) = callback.send((session_id.clone(), data.clone())) {
+                    error!("Failed to send audio to session {}: {}", session_id, e);
+                }
+            }
+        }
 
         info!("Audio data processed successfully (format: {}, size: {} bytes)",
               audio_format, data.len());

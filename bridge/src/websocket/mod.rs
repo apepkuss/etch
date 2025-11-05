@@ -1,3 +1,11 @@
+// 模块导出
+pub mod connection_manager;
+pub mod session_manager;
+pub mod audio_handler;
+pub mod heartbeat;
+pub mod flow_control;
+
+// 原有的 API Gateway 连接功能（保留兼容性）
 use echo_shared::AppConfig;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
