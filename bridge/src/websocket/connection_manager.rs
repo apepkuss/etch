@@ -161,6 +161,40 @@ impl DeviceConnectionManager {
         heartbeats.insert(device_id.to_string(), chrono::Utc::now());
     }
 
+    /// 发送 MessagePack 编码的 ServerEvent
+    /// 用于与 Web 客户端（index_zh.html）通信
+    pub async fn send_server_event(
+        &self,
+        device_id: &str,
+        event: super::protocol::ServerEvent,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let binary_data = event.to_messagepack()
+            .context("Failed to serialize ServerEvent to MessagePack")?;
+
+        self.send_binary(device_id, binary_data).await
+    }
+
+    /// 发送二进制数据到设备
+    pub async fn send_binary(
+        &self,
+        device_id: &str,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let data_len = data.len();
+
+        let connections = self.connections.read().await;
+        let sender = connections
+            .get(device_id)
+            .ok_or_else(|| anyhow::anyhow!("Device {} not connected", device_id))?;
+
+        use futures_util::SinkExt;
+        sender.write().await.send(Message::Binary(Bytes::from(data))).await?;
+        debug!("Sent binary data ({} bytes) to device {}", data_len, device_id);
+        Ok(())
+    }
+
     /// 获取在线设备数量
     pub async fn get_online_count(&self) -> usize {
         let connections = self.connections.read().await;

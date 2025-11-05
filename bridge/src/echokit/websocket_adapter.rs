@@ -6,6 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::echokit_client::EchoKitClient;
 use crate::websocket::connection_manager::DeviceConnectionManager;
+use crate::websocket::protocol::ServerEvent;
 use echo_shared::{AudioFormat, EchoKitConfig};
 
 /// EchoKit 会话适配器 - 负责 Bridge Session 和 EchoKit 的集成
@@ -18,6 +19,8 @@ pub struct EchoKitSessionAdapter {
     session_mapping: Arc<RwLock<HashMap<String, (String, String)>>>,
     /// 音频接收通道
     audio_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, Vec<u8>)>>>>,
+    /// ASR 接收通道
+    asr_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, String)>>>>,
 }
 
 impl EchoKitSessionAdapter {
@@ -26,12 +29,14 @@ impl EchoKitSessionAdapter {
         echokit_client: Arc<EchoKitClient>,
         connection_manager: Arc<DeviceConnectionManager>,
         audio_receiver: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
+        asr_receiver: mpsc::UnboundedReceiver<(String, String)>,
     ) -> Self {
         Self {
             echokit_client,
             connection_manager,
             session_mapping: Arc::new(RwLock::new(HashMap::new())),
             audio_receiver: Arc::new(RwLock::new(Some(audio_receiver))),
+            asr_receiver: Arc::new(RwLock::new(Some(asr_receiver))),
         }
     }
 
@@ -128,25 +133,96 @@ impl EchoKitSessionAdapter {
                 audio_data.len()
             );
 
-            // 根据 echokit_session_id 找到对应的 bridge_session_id
-            let bridge_session_id = self.get_bridge_session(&echokit_session_id).await;
+            // 根据 echokit_session_id 找到对应的 bridge_session_id 和 device_id
+            let session_info = {
+                let mapping = self.session_mapping.read().await;
+                mapping
+                    .iter()
+                    .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
+                    .map(|(bridge_id, (dev_id, _))| (bridge_id.clone(), dev_id.clone()))
+            };
 
-            if let Some(bridge_session_id) = bridge_session_id {
-                // 将音频数据路由到对应的设备
-                match self
+            if let Some((bridge_session_id, device_id)) = session_info {
+                // 发送 StartAudio 事件
+                if let Err(e) = self
                     .connection_manager
-                    .push_audio_by_session(&bridge_session_id, audio_data)
+                    .send_server_event(
+                        &device_id,
+                        ServerEvent::StartAudio {
+                            text: "语音回复".to_string(),
+                        },
+                    )
                     .await
                 {
-                    Ok(_) => {
-                        debug!("Audio routed to bridge session {}", bridge_session_id);
+                    error!(
+                        "Failed to send StartAudio event to device {}: {}",
+                        device_id, e
+                    );
+                    continue;
+                }
+
+                debug!(
+                    "Sent StartAudio event to device {} for bridge session {}",
+                    device_id, bridge_session_id
+                );
+
+                // 分块发送音频数据（每块 2048 字节）
+                const CHUNK_SIZE: usize = 2048;
+                let chunks: Vec<_> = audio_data.chunks(CHUNK_SIZE).collect();
+                let total_chunks = chunks.len();
+
+                for (index, chunk) in chunks.into_iter().enumerate() {
+                    match self
+                        .connection_manager
+                        .send_server_event(
+                            &device_id,
+                            ServerEvent::AudioChunk {
+                                data: chunk.to_vec(),
+                            },
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            if (index + 1) % 10 == 0 || index + 1 == total_chunks {
+                                debug!(
+                                    "Sent audio chunk {}/{} ({} bytes) to device {}",
+                                    index + 1,
+                                    total_chunks,
+                                    chunk.len(),
+                                    device_id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to send audio chunk {}/{} to device {}: {}",
+                                index + 1,
+                                total_chunks,
+                                device_id,
+                                e
+                            );
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            "Failed to route audio to bridge session {}: {}",
-                            bridge_session_id, e
-                        );
-                    }
+                }
+
+                // 发送 EndAudio 事件
+                if let Err(e) = self
+                    .connection_manager
+                    .send_server_event(&device_id, ServerEvent::EndAudio)
+                    .await
+                {
+                    error!(
+                        "Failed to send EndAudio event to device {}: {}",
+                        device_id, e
+                    );
+                } else {
+                    info!(
+                        "Completed audio stream to device {}: {} chunks ({} bytes total)",
+                        device_id,
+                        total_chunks,
+                        audio_data.len()
+                    );
                 }
             } else {
                 warn!(
@@ -157,6 +233,75 @@ impl EchoKitSessionAdapter {
         }
 
         info!("Audio receiver stopped");
+    }
+
+    /// 启动 ASR 接收器（从 EchoKit 接收 ASR 结果并路由到设备）
+    pub async fn start_asr_receiver(self: Arc<Self>) {
+        info!("Starting EchoKit ASR receiver");
+
+        // 获取 ASR 接收通道
+        let mut asr_rx = {
+            let mut receiver_guard = self.asr_receiver.write().await;
+            receiver_guard.take()
+        };
+
+        if asr_rx.is_none() {
+            error!("ASR receiver channel not available");
+            return;
+        }
+
+        let mut asr_rx = asr_rx.unwrap();
+
+        // 持续监听 ASR 数据
+        while let Some((echokit_session_id, asr_text)) = asr_rx.recv().await {
+            debug!(
+                "Received ASR from EchoKit session {}: {}",
+                echokit_session_id, asr_text
+            );
+
+            // 根据 echokit_session_id 找到对应的 device_id
+            let device_id = {
+                let mapping = self.session_mapping.read().await;
+                mapping
+                    .iter()
+                    .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
+                    .map(|(_, (dev_id, _))| dev_id.clone())
+            };
+
+            if let Some(device_id) = device_id {
+                // 发送 ASR 事件到设备
+                match self
+                    .connection_manager
+                    .send_server_event(
+                        &device_id,
+                        ServerEvent::ASR {
+                            text: asr_text.clone(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        debug!(
+                            "Forwarded ASR to device {}: {}",
+                            device_id, asr_text
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to forward ASR to device {}: {}",
+                            device_id, e
+                        );
+                    }
+                }
+            } else {
+                warn!(
+                    "No device found for EchoKit session {} (ASR: {})",
+                    echokit_session_id, asr_text
+                );
+            }
+        }
+
+        info!("ASR receiver stopped");
     }
 
     /// 关闭 EchoKit 会话

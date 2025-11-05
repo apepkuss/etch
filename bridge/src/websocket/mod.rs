@@ -4,6 +4,7 @@ pub mod session_manager;
 pub mod audio_handler;
 pub mod heartbeat;
 pub mod flow_control;
+pub mod protocol;
 
 // 原有的 API Gateway 连接功能（保留兼容性）
 use echo_shared::AppConfig;

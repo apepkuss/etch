@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{info, warn, error, debug};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use axum::{extract::State, response::Json, routing::get, Router};
+use std::collections::HashMap;
 
 // Bridge 服务配置
 #[derive(Debug, Clone)]
@@ -110,10 +111,14 @@ async fn main() -> Result<()> {
     // 创建音频回调通道（用于 EchoKit -> Adapter -> Device 的音频路由）
     let (audio_callback_tx, audio_callback_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // 创建 EchoKit 连接管理器（带音频回调）
-    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_audio_callback(
+    // 创建 ASR 回调通道（用于 EchoKit -> Adapter -> Device 的 ASR 结果路由）
+    let (asr_callback_tx, asr_callback_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // 创建 EchoKit 连接管理器（带音频和 ASR 回调）
+    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_callbacks(
         config.echokit_websocket_url.clone(),
         audio_callback_tx,
+        asr_callback_tx,
     ));
 
     // 创建音频处理器
@@ -136,17 +141,24 @@ async fn main() -> Result<()> {
     let connection_manager = Arc::new(websocket::connection_manager::DeviceConnectionManager::new());
     let session_manager = Arc::new(websocket::session_manager::SessionManager::new());
 
-    // 创建 EchoKit 适配器（带音频接收器）
+    // 创建 EchoKit 适配器（带音频和 ASR 接收器）
     let echokit_adapter = Arc::new(echokit::EchoKitSessionAdapter::new(
         echokit_manager.get_client(),
         connection_manager.clone(),
         audio_callback_rx,
+        asr_callback_rx,
     ));
 
     // 启动 EchoKit 音频接收器
     let echokit_adapter_clone = echokit_adapter.clone();
     tokio::spawn(async move {
         echokit_adapter_clone.start_audio_receiver().await;
+    });
+
+    // 启动 EchoKit ASR 接收器
+    let echokit_adapter_clone = echokit_adapter.clone();
+    tokio::spawn(async move {
+        echokit_adapter_clone.start_asr_receiver().await;
     });
 
     // 创建心跳监控
@@ -405,7 +417,10 @@ impl BridgeService {
             };
 
             let app = Router::new()
+                // 支持旧的固定路径（向后兼容）
                 .route("/ws/audio", get(websocket::audio_handler::websocket_handler))
+                // 支持新的动态路径 /ws/:id?record=true
+                .route("/ws/:id", get(websocket::audio_handler::websocket_handler_with_id))
                 .with_state(ws_state);
 
             info!("WebSocket server listening on: {}", ws_bind_address);

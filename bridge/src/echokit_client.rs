@@ -24,6 +24,7 @@ pub struct EchoKitClient {
     message_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<EchoKitClientMessage>>>>,
     active_sessions: Arc<RwLock<HashMap<String, String>>>, // session_id -> device_id
     audio_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, audio_data)
+    asr_callback: Option<mpsc::UnboundedSender<(String, String)>>, // (session_id, asr_text)
 }
 
 impl EchoKitClient {
@@ -39,6 +40,7 @@ impl EchoKitClient {
             message_receiver: Arc::new(RwLock::new(Some(rx))),
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: None,
+            asr_callback: None,
         }
     }
 
@@ -58,6 +60,28 @@ impl EchoKitClient {
             message_receiver: Arc::new(RwLock::new(Some(rx))),
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
+            asr_callback: None,
+        }
+    }
+
+    /// Create a new EchoKitClient with both audio and ASR callback support
+    pub fn new_with_callbacks(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+        asr_callback: mpsc::UnboundedSender<(String, String)>,
+    ) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        Self {
+            websocket_url,
+            ws_stream: Arc::new(RwLock::new(None)),
+            is_connected: Arc::new(RwLock::new(false)),
+            service_status: Arc::new(RwLock::new(None)),
+            message_sender: tx,
+            message_receiver: Arc::new(RwLock::new(Some(rx))),
+            active_sessions: Arc::new(RwLock::new(HashMap::new())),
+            audio_callback: Some(audio_callback),
+            asr_callback: Some(asr_callback),
         }
     }
 
@@ -260,6 +284,7 @@ impl EchoKitClient {
         let service_status = self.service_status.clone();
         let active_sessions = self.active_sessions.clone();
         let audio_callback = self.audio_callback.clone();
+        let asr_callback = self.asr_callback.clone();
 
         // 为每个连接创建独立的消息通道
         let (tx, mut rx) = mpsc::unbounded_channel::<EchoKitClientMessage>();
@@ -283,6 +308,7 @@ impl EchoKitClient {
                                     text,
                                     &service_status,
                                     &active_sessions,
+                                    &asr_callback,
                                 ).await {
                                     error!("Error handling server message: {}", e);
                                 }
@@ -364,6 +390,7 @@ impl EchoKitClient {
         text: String,
         service_status: &Arc<RwLock<Option<EchoKitServiceStatus>>>,
         active_sessions: &Arc<RwLock<HashMap<String, String>>>,
+        asr_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
     ) -> Result<()> {
         let server_message: EchoKitServerMessage = serde_json::from_str(&text)
             .with_context(|| format!("Failed to parse server message: {}", text))?;
@@ -403,23 +430,31 @@ impl EchoKitClient {
             }
             EchoKitServerMessage::Transcription {
                 session_id,
-                device_id,
+                device_id: _,
                 text,
                 confidence,
                 is_final,
-                timestamp
+                timestamp: _
             } => {
                 info!("Transcription for session {}: {} (confidence: {:.2}, final: {})",
                       session_id, text, confidence, is_final);
-                // 这里可以转发转录结果到前端或其他服务
+
+                // Forward ASR results via callback if available
+                if let Some(callback) = asr_callback {
+                    if let Err(e) = callback.send((session_id.clone(), text.clone())) {
+                        warn!("Failed to send ASR result via callback: {}", e);
+                    } else {
+                        debug!("Forwarded ASR result for session {}", session_id);
+                    }
+                }
             }
             EchoKitServerMessage::Response {
                 session_id,
-                device_id,
+                device_id: _,
                 text,
                 audio_data,
                 is_complete,
-                timestamp
+                timestamp: _
             } => {
                 info!("Response for session {}: {} (complete: {})", session_id, text, is_complete);
                 if let Some(audio) = audio_data {
@@ -427,7 +462,7 @@ impl EchoKitClient {
                 }
                 // 这里可以转发响应到设备
             }
-            EchoKitServerMessage::Error { session_id, device_id, error } => {
+            EchoKitServerMessage::Error { session_id, device_id: _, error } => {
                 error!("Error for session {}: {} - {}", session_id, error.code, error.message);
                 // 这里可以处理错误并通知相关服务
             }
@@ -477,6 +512,19 @@ impl EchoKitConnectionManager {
     ) -> Self {
         Self {
             client: Arc::new(EchoKitClient::new_with_audio_callback(websocket_url, audio_callback)),
+            reconnect_interval: tokio::time::Duration::from_secs(5),
+            max_reconnect_attempts: 10,
+        }
+    }
+
+    /// Create a new connection manager with both audio and ASR callback support
+    pub fn new_with_callbacks(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+        asr_callback: mpsc::UnboundedSender<(String, String)>,
+    ) -> Self {
+        Self {
+            client: Arc::new(EchoKitClient::new_with_callbacks(websocket_url, audio_callback, asr_callback)),
             reconnect_interval: tokio::time::Duration::from_secs(5),
             max_reconnect_attempts: 10,
         }

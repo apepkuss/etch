@@ -1,12 +1,13 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        State, Path, Query,
     },
     response::Response,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
+use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
 use crate::echokit::EchoKitSessionAdapter;
@@ -32,13 +33,37 @@ pub async fn websocket_handler(
 
     info!("Device {} initiating WebSocket connection", device_id);
 
-    ws.on_upgrade(move |socket| handle_device_websocket(socket, device_id, state))
+    ws.on_upgrade(move |socket| handle_device_websocket(socket, device_id, false, state))
+}
+
+/// WebSocket 升级处理器（带 visitor_id 和 record 参数）
+pub async fn websocket_handler_with_id(
+    ws: WebSocketUpgrade,
+    Path(visitor_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Response {
+    // 从查询参数中提取 record 模式
+    let record_mode = params
+        .get("record")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    info!(
+        "Client {} connecting (record_mode: {})",
+        visitor_id, record_mode
+    );
+
+    ws.on_upgrade(move |socket| {
+        handle_device_websocket(socket, visitor_id, record_mode, state)
+    })
 }
 
 /// 处理设备 WebSocket 连接
 async fn handle_device_websocket(
     socket: WebSocket,
     device_id: String,
+    record_mode: bool,
     state: AppState,
 ) {
     let (sender, mut receiver) = socket.split();
@@ -52,7 +77,7 @@ async fn handle_device_websocket(
         return;
     }
 
-    info!("Device {} WebSocket connected", device_id);
+    info!("Device {} WebSocket connected (record_mode: {})", device_id, record_mode);
 
     // 2. 当前活跃会话 ID
     let mut active_session: Option<String> = None;
@@ -65,6 +90,7 @@ async fn handle_device_websocket(
                 if let Err(e) = handle_control_message(
                     &text,
                     &device_id,
+                    record_mode,
                     &mut active_session,
                     &state,
                 ).await {
@@ -124,9 +150,16 @@ async fn handle_device_websocket(
 async fn handle_control_message(
     text: &str,
     device_id: &str,
+    record_mode: bool,
     active_session: &mut Option<String>,
     state: &AppState,
 ) -> anyhow::Result<()> {
+    // 优先尝试解析为 ClientCommand（Web 客户端协议）
+    if let Ok(cmd) = super::protocol::ClientCommand::from_json(text) {
+        return handle_client_command(cmd, device_id, record_mode, active_session, state).await;
+    }
+
+    // 回退到旧的 DeviceEvent 格式（保持向后兼容）
     let event: DeviceEvent = serde_json::from_str(text)?;
 
     match event.event_type.as_str() {
@@ -240,6 +273,95 @@ async fn forward_audio_to_echokit(
     state.session_manager.increment_sent_frames(session_id).await;
 
     debug!("Forwarded {} bytes audio for session {}", data_len, session_id);
+    Ok(())
+}
+
+/// 处理客户端命令（Web 客户端协议）
+async fn handle_client_command(
+    cmd: super::protocol::ClientCommand,
+    device_id: &str,
+    record_mode: bool,
+    active_session: &mut Option<String>,
+    state: &AppState,
+) -> anyhow::Result<()> {
+    use super::protocol::ClientCommand;
+
+    match cmd {
+        ClientCommand::StartChat | ClientCommand::StartRecord => {
+            // 使用传入的 record_mode 参数，或从命令判断（向后兼容）
+            let is_record = record_mode || cmd.is_record_mode();
+
+            // 创建新会话
+            let session_id = generate_session_id();
+            info!(
+                "Device {} starting {} session {}",
+                device_id,
+                if is_record { "record" } else { "chat" },
+                session_id
+            );
+
+            // 绑定会话到设备
+            state.session_manager
+                .create_session(session_id.clone(), device_id.to_string())
+                .await?;
+
+            state.connection_manager
+                .bind_session(session_id.clone(), device_id.to_string())
+                .await?;
+
+            // 只有对话模式才创建 EchoKit 会话
+            if !is_record {
+                let echokit_config = echo_shared::EchoKitConfig::default();
+                if let Err(e) = state.echokit_adapter
+                    .create_echokit_session(
+                        session_id.clone(),
+                        device_id.to_string(),
+                        echokit_config,
+                    )
+                    .await
+                {
+                    error!("Failed to create EchoKit session: {}", e);
+                }
+            } else {
+                info!("Record mode: skipping EchoKit session creation");
+            }
+
+            // 更新活跃会话
+            *active_session = Some(session_id.clone());
+
+            // 响应客户端（兼容 Web 客户端，不发送响应）
+            // Web 客户端不期望响应消息
+            info!("Session {} created successfully", session_id);
+        }
+
+        ClientCommand::Submit => {
+            if let Some(session_id) = active_session {
+                info!("Device {} submitted audio for session {}", device_id, session_id);
+
+                // 标记音频流结束，EchoKit 会开始处理
+                // 实际的音频数据已经通过 Binary 消息发送
+                debug!("Audio submission completed for session {}", session_id);
+            } else {
+                warn!("Received Submit without active session from device {}", device_id);
+            }
+        }
+
+        ClientCommand::Text { input } => {
+            if let Some(session_id) = active_session {
+                info!(
+                    "Device {} sent text input for session {}: {}",
+                    device_id, session_id, input
+                );
+
+                // TODO: 处理文本输入，发送到 EchoKit
+                // 当前 EchoKit 适配器可能需要扩展以支持文本输入
+                warn!("Text input handling not yet implemented");
+            } else {
+                warn!("Received Text without active session from device {}", device_id);
+            }
+        }
+    }
+
     Ok(())
 }
 
