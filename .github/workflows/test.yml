@@ -234,9 +234,9 @@ jobs:
           - tests/integration/test_api_storage_integration.sh
           - tests/integration/test_web_api_integration.sh
           - tests/integration/test_bridge_echokit_integration.sh
-        api-port: [18080]
-        web-port: [18084]
-        bridge-port: [18082]
+        api-port: [10033]
+        web-port: [10034]
+        bridge-port: [10031]
       fail-fast: false
     steps:
       - name: Checkout code
@@ -258,27 +258,9 @@ jobs:
 
       - name: Configure docker-compose
         run: |
-          echo "=== 配置 docker-compose 端口映射 ==="
+          echo "=== 配置 docker-compose ==="
           echo "✅ 使用外部 EchoKit Server: $ECHOKIT_WEBSOCKET_URL"
-
-          # 备份原始 docker-compose.yml
-          cp docker-compose.yml docker-compose.yml.bak
-
-          # 使用 sed 修改端口配置
-          echo "修改 Bridge 端口映射: 10031 -> 18082, 10032 -> 18083"
-          sed -i 's/"10031:8082"/"18082:8082"/g' docker-compose.yml
-          sed -i 's/"10032:8083"/"18083:8083"/g' docker-compose.yml
-
-          echo "修改 API Gateway 端口映射: 10033 -> 18080"
-          sed -i 's/"10033:8080"/"18080:8080"/g' docker-compose.yml
-
-          echo "修改 Web Management 端口映射: 10034 -> 18084"
-          sed -i 's/"10034:5174"/"18084:5174"/g' docker-compose.yml
-
-          # 验证端口配置
-          echo ""
-          echo "=== 完整的端口映射列表 ==="
-          grep -E '^\s+- "[0-9]+:[0-9]+"' docker-compose.yml
+          echo "✅ 使用统一的 1003x 系列端口"
 
           # 创建或复制 .env 文件
           if [ -f ".env.example" ]; then
@@ -286,6 +268,11 @@ jobs:
           else
             echo "警告: .env.example 不存在，跳过"
           fi
+
+          # 验证端口配置
+          echo ""
+          echo "=== 当前端口映射列表 ==="
+          grep -E '^\s+- "[0-9]+:[0-9]+"' docker-compose.yml
 
       - name: Download Docker images
         run: |
@@ -402,8 +389,8 @@ jobs:
             web_healthy=false
             mqtt_healthy=false
 
-            # 检查 API Gateway
-            if curl -f http://localhost:18080/health 2>/dev/null; then
+                        # 检查 API Gateway
+            if curl -f http://localhost:10033/health 2>/dev/null; then
               echo "✓ API Gateway 健康检查通过"
               api_healthy=true
             else
@@ -411,7 +398,7 @@ jobs:
             fi
 
             # 检查 Bridge
-            if curl -f http://localhost:18082/health 2>/dev/null; then
+            if curl -f http://localhost:10031/health 2>/dev/null; then
               echo "✓ Bridge 健康检查通过"
               bridge_healthy=true
             else
@@ -419,7 +406,7 @@ jobs:
             fi
 
             # 检查 Web Management
-            if curl -f http://localhost:18084/health 2>/dev/null; then
+            if curl -f http://localhost:10034/health 2>/dev/null; then
               echo "✓ Web Management 健康检查通过"
               web_healthy=true
             else
@@ -452,7 +439,7 @@ jobs:
 
           # 检查端口监听情况
           echo "=== 端口监听情况 ==="
-          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" || echo "无法检查端口监听"
+          netstat -tlnp | grep -E "(10031|10032|10033|10034|10035|10036|10037|10038|10039)" || echo "无法检查端口监听"
 
       - name: Run integration test
         run: |
@@ -511,7 +498,7 @@ jobs:
           docker images >> service-logs-${{ matrix.test-script }}.txt
 
           echo "=== Port Bindings ===" >> service-logs-${{ matrix.test-script }}.txt
-          netstat -tlnp | grep -E "(18080|18082|18083|18084|10039)" >> service-logs-${{ matrix.test-script }}.txt || echo "无法获取端口信息"
+          netstat -tlnp | grep -E "(10031|10032|10033|10034|10035|10036|10037|10038|10039)" >> service-logs-${{ matrix.test-script }}.txt || echo "无法获取端口信息"
 
       - name: Upload test results
         if: failure()
