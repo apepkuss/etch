@@ -23,12 +23,12 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置
-BRIDGE_BASE_URL="http://localhost:18082"
-BRIDGE_WS_URL="ws://localhost:18082"
+BRIDGE_BASE_URL="http://localhost:10031"
+BRIDGE_WS_URL="ws://localhost:10031"
 # 生成唯一的 visitor ID 用于 EchoKit WebSocket 连接
 VISITOR_ID="test-$(date +%s)-$$"
 ECHOKIT_WS_URL="wss://indie.echokit.dev/ws/${VISITOR_ID}"
-UDP_PORT="18083"
+UDP_PORT="10032"
 MQTT_BROKER="localhost"
 MQTT_PORT="10039"
 TEST_TIMEOUT=600
@@ -974,10 +974,10 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
-    echo "  -b, --bridge-url URL    Bridge 服务 URL (默认: http://localhost:18082)"
+    echo "  -b, --bridge-url URL    Bridge 服务 URL (默认: http://localhost:10031)"
     echo "  -e, --echokit-url URL   EchoKit WebSocket URL (默认: 自动生成 wss://indie.echokit.dev/ws/{visitor-id})"
     echo "                          注意: 必须包含完整路径和 visitorId"
-    echo "  -u, --udp-port PORT     UDP 端口 (默认: 18083)"
+    echo "  -u, --udp-port PORT     UDP 端口 (默认: 10032)"
     echo "  -m, --mqtt-host HOST    MQTT Broker 主机 (默认: localhost)"
     echo "  --mqtt-port PORT        MQTT 端口 (默认: 10039)"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 600)"
@@ -998,7 +998,7 @@ show_help() {
     echo ""
     echo "示例:"
     echo "  $0"
-    echo "  $0 --bridge-url http://localhost:18082 --verbose"
+    echo "  $0 --bridge-url http://localhost:10031 --verbose"
     echo "  $0 --echokit-url wss://indie.echokit.dev/ws/my-unique-id"
     echo ""
 }

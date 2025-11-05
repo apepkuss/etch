@@ -29,7 +29,34 @@
   - Cache-Aside 模式
   - 事务回滚
 
-### 3. 完整集成测试运行器
+### 3. Bridge 与 EchoKit Server 集成测试
+- **脚本**: `test_bridge_echokit_integration.sh`
+- **目的**: 验证 Bridge 服务与 EchoKit Server、MQTT Broker 的集成
+- **测试内容**:
+  - Bridge 服务健康检查
+  - Bridge 统计信息获取
+  - MQTT Broker 连接测试
+  - MQTT 发布/订阅功能
+  - Bridge MQTT 主题订阅
+  - UDP 端口监听验证
+  - Bridge 与 EchoKit WebSocket 连接
+  - 音频处理器初始化
+  - **UDP 音频上传测试** ⭐ 新增
+  - **端到端语音交互流程** ⭐ 核心测试
+    - UDP → Bridge → EchoKit (ASR+LLM+TTS) → Bridge → UDP
+    - 完整的语音输入/输出闭环验证
+  - **音频格式转换测试** ⭐ 新增
+  - **VAD 语音活动检测** ⭐ 新增
+  - 会话管理功能
+  - 设备在线状态管理
+  - 错误处理和恢复机制
+  - 服务依赖关系验证
+  - 资源使用监控
+  - EchoKit Server 外部服务可达性
+
+**特色功能**: 包含完整的端到端语音交互测试，模拟真实的音频输入经过 Bridge 转发到 EchoKit，再由 EchoKit 的 TTS 生成语音原路返回的完整流程。
+
+### 4. 完整集成测试运行器
 - **脚本**: `run_all_tests.sh`
 - **目的**: 运行所有集成测试并生成报告
 - **功能**:
@@ -71,11 +98,20 @@
 # API Gateway 与存储层集成测试
 ./tests/integration/test_api_storage_integration.sh
 
+# Bridge 与 EchoKit Server 集成测试
+./tests/integration/test_bridge_echokit_integration.sh
+
 # 使用自定义参数
 ./tests/integration/test_web_api_integration.sh \
-  --api-url http://localhost:9031 \
-  --web-url http://localhost:9030 \
+  --api-url http://localhost:10033 \
+  --web-url http://localhost:10034 \
   --timeout 300
+
+./tests/integration/test_bridge_echokit_integration.sh \
+  --bridge-url http://localhost:10031 \
+  --mqtt-host localhost \
+  --mqtt-port 10039 \
+  --timeout 600
 ```
 
 ## 📊 测试报告
@@ -104,11 +140,11 @@ cp .env.example .env
 ### 2. 启动服务
 
 ```bash
-# 下载 EchoKit Server
-./scripts/download-echokit-server.sh latest
-
-# 启动所有服务
+# 启动所有服务（使用外部 EchoKit Server）
 make deploy
+
+# 或使用启动脚本
+./scripts/start.sh
 
 # 验证服务状态
 make health
@@ -152,7 +188,7 @@ docker compose logs -f redis
 2. **端口冲突**
    ```bash
    # 检查端口占用
-   lsof -i :9031
+   lsof -i :10033
 
    # 修改端口配置
    nano .env
@@ -189,8 +225,8 @@ docker compose logs -f redis
 
 3. **手动测试 API**
    ```bash
-   curl http://localhost:9031/health
-   curl http://localhost:9030
+   curl http://localhost:10033/health
+   curl http://localhost:10034
    ```
 
 ## 🔄 GitHub Actions 工作流

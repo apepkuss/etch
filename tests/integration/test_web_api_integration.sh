@@ -12,8 +12,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置
-API_BASE_URL="http://localhost:18080"
-WEB_BASE_URL="http://localhost:18084"
+API_BASE_URL="http://localhost:10033"
+WEB_BASE_URL="http://localhost:10034"
 TEST_TIMEOUT=300
 SLEEP_INTERVAL=5
 
@@ -257,13 +257,13 @@ wait_for_services() {
         log_info "认证端点详细响应: $auth_detail"
 
         # 检查直接 API Gateway 健康状态（备用）
-        local direct_api_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/health" 2>/dev/null)
-        log_info "直接API Gateway健康检查 (http://localhost:18080/health): HTTP $direct_api_health"
+        local direct_api_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:10033/health" 2>/dev/null)
+        log_info "直接API Gateway健康检查 (http://localhost:10033/health): HTTP $direct_api_health"
 
         # 检查直接访问 API Gateway v1 认证端点（使用正确的 POST 方法）
-        local direct_v1_auth=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:18080/api/v1/auth/login" \
+        local direct_v1_auth=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:10033/api/v1/auth/login" \
             -H "Content-Type: application/json" -d '{}' 2>/dev/null)
-        log_info "直接API Gateway认证端点 (http://localhost:18080/api/v1/auth/login): HTTP $direct_v1_auth"
+        log_info "直接API Gateway认证端点 (http://localhost:10033/api/v1/auth/login): HTTP $direct_v1_auth"
 
         # 检查 Web 管理界面状态
         local web_health_response=$(curl -s -o /dev/null -w "%{http_code}" "${WEB_BASE_URL}/health" 2>/dev/null)
@@ -436,13 +436,13 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help              显示帮助信息"
-    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:18080)"
-    echo "  -w, --web-url URL       Web 界面 URL (默认: http://localhost:18084)"
+    echo "  -u, --api-url URL       API Gateway URL (默认: http://localhost:10033)"
+    echo "  -w, --web-url URL       Web 界面 URL (默认: http://localhost:10034)"
     echo "  -t, --timeout SECONDS   测试超时时间 (默认: 300)"
     echo ""
     echo "示例:"
     echo "  $0"
-    echo "  $0 --api-url http://localhost:18080 --web-url http://localhost:18084"
+    echo "  $0 --api-url http://localhost:10033 --web-url http://localhost:10034"
     echo ""
 }
 

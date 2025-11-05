@@ -35,8 +35,8 @@ TEST_TIMEOUT=600
 EXIT_CODE=0
 
 # 默认端口配置（支持命令行参数覆盖）
-API_BASE_URL="http://localhost:18080"
-WEB_BASE_URL="http://localhost:18084"
+API_BASE_URL="http://localhost:10033"
+WEB_BASE_URL="http://localhost:10034"
 ECHOKIT_WS_URL="wss://indie.echokit.dev/ws/"
 
 # 测试结果统计
@@ -148,7 +148,7 @@ run_test_suite() {
     echo "测试套件 $TOTAL_SUITES: $test_name"
     echo "========================================"
 
-    if "$test_script"; then
+    if eval "$test_script"; then
         log_success "✅ $test_description - 通过"
         PASSED_SUITES=$((PASSED_SUITES + 1))
         echo
@@ -209,7 +209,7 @@ cleanup_test_environment() {
         log_info "访问地址:"
         log_info "  Web管理界面: $WEB_BASE_URL"
         log_info "  API Gateway:  $API_BASE_URL"
-        log_info "  Bridge: http://localhost:18082"
+        log_info "  Bridge: http://localhost:10031"
         log_info "  EchoKit WebSocket: $ECHOKIT_WS_URL"
         log_info "要停止服务，请运行: docker compose down"
     else
@@ -327,7 +327,7 @@ main() {
             "API Gateway 与存储层集成测试"
 
         run_test_suite "Bridge-EchoKit集成" \
-            "$SCRIPT_DIR/test_bridge_echokit_integration.sh --bridge-url \"http://localhost:18082\" --mqtt-host localhost --mqtt-port 10039 --timeout 300" \
+            "$SCRIPT_DIR/test_bridge_echokit_integration.sh --bridge-url \"http://localhost:10031\" --mqtt-host localhost --mqtt-port 10039 --timeout 300" \
             "Bridge 与 EchoKit Server 集成测试"
 
         # 生成测试报告
