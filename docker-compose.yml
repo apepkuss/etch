@@ -131,9 +131,9 @@ services:
       # 服务发现
       BRIDGE_WEBSOCKET_URL: ws://bridge:8082
       # CORS 配置
-      CORS_ORIGINS: "http://localhost:18084,http://localhost:3000"
+      CORS_ORIGINS: "http://localhost:10034,http://localhost:3000"
     ports:
-      - "18080:8080"
+      - "10033:8080"
     networks:
       - echo-network
     depends_on:
@@ -159,10 +159,10 @@ services:
     container_name: echo-web-management
     restart: unless-stopped
     environment:
-      REACT_APP_API_BASE_URL: http://localhost:18080
-      REACT_APP_WS_URL: ws://localhost:18080
+      REACT_APP_API_BASE_URL: http://localhost:10033
+      REACT_APP_WS_URL: ws://localhost:10033
     ports:
-      - "18084:5174"
+      - "10034:5174"
     networks:
       - echo-network
     depends_on:

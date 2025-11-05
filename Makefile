@@ -45,10 +45,6 @@ logs-redis: ## 查看 Redis 日志
 	@echo "查看 Redis 日志..."
 	$(COMPOSE_CMD) logs -f redis
 
-logs-echokit: ## 查看 EchoKit Server 日志
-	@echo "查看 EchoKit Server 日志..."
-	$(COMPOSE_CMD) logs -f echokit-server
-
 clean: ## 清理容器和镜像
 	@echo "清理容器和镜像..."
 	$(COMPOSE_CMD) down -v
@@ -58,16 +54,6 @@ health: ## 检查服务健康状态
 	@echo "检查服务健康状态..."
 	@sleep 5
 	$(COMPOSE_CMD) ps
-
-# EchoKit Server 相关命令
-download-echokit: ## 下载 EchoKit Server
-	@echo "下载 EchoKit Server..."
-	./scripts/download-echokit-server.sh latest
-
-update-echokit: ## 更新 EchoKit Server 到最新版本
-	@echo "更新 EchoKit Server..."
-	rm -rf echokit-server-deployment
-	./scripts/download-echokit-server.sh latest
 
 # 数据库操作
 db-connect: ## 连接数据库
@@ -167,11 +153,11 @@ shell-redis: ## 进入 Redis 容器
 # 网络和连接测试
 test-api: ## 测试 API Gateway 连接
 	@echo "测试 API Gateway 连接..."
-	curl -f http://localhost:9031/health || echo "API Gateway 连接失败"
+	curl -f http://localhost:10033/health || echo "API Gateway 连接失败"
 
 test-web: ## 测试 Web 界面连接
 	@echo "测试 Web 界面连接..."
-	curl -f http://localhost:9030/health || echo "Web 界面连接失败"
+	curl -f http://localhost:10034/health || echo "Web 界面连接失败"
 
 test-db: ## 测试数据库连接
 	@echo "测试数据库连接..."
@@ -181,9 +167,9 @@ test-redis: ## 测试 Redis 连接
 	@echo "测试 Redis 连接..."
 	$(COMPOSE_CMD) exec redis redis-cli -a redis_password ping || echo "Redis 连接失败"
 
-test-echokit: ## 测试 EchoKit Server 连接
-	@echo "测试 EchoKit Server 连接..."
-	curl -f http://localhost:9034/health || echo "EchoKit Server 连接失败"
+test-bridge: ## 测试 Bridge 服务连接
+	@echo "测试 Bridge 服务连接..."
+	curl -f http://localhost:10031/health || echo "Bridge 服务连接失败"
 
 # 安全和维护命令
 security-check: ## 安全检查
@@ -214,33 +200,36 @@ info: ## 显示系统信息
 
 ports: ## 显示端口映射
 	@echo "=== 端口映射 ==="
-	@echo "Web 管理界面:  http://localhost:9030"
-	@echo "API Gateway:      http://localhost:9031"
-	@echo "EchoKit Server:   http://localhost:9034"
-	@echo "PostgreSQL:       localhost:5432"
-	@echo "Redis:           localhost:6379"
-	@echo "pgAdmin:         http://localhost:9035"
-	@echo "Redis Commander:  http://localhost:9036"
-	@echo "MQTT:           localhost:9037"
+	@echo "Web 管理界面:    http://localhost:10034"
+	@echo "API Gateway:     http://localhost:10033"
+	@echo "Bridge WebSocket: ws://localhost:10031"
+	@echo "Bridge UDP:      udp://localhost:10032"
+	@echo "PostgreSQL:      localhost:10035"
+	@echo "Redis:           localhost:10036"
+	@echo "pgAdmin:         http://localhost:10037"
+	@echo "Redis Commander: http://localhost:10038"
+	@echo "MQTT:            localhost:10039"
 	@echo ""
 
 urls: ## 显示所有访问 URL
 	@echo "=== 访问地址 ==="
-	@echo "📱 Web管理界面:    http://localhost:9030"
+	@echo "📱 Web管理界面:    http://localhost:10034"
 	@echo "     用户名: admin, 密码: admin123"
-	@echo "🔌 API Gateway:    http://localhost:9031"
-	@echo "🧠 EchoKit Server: http://localhost:9034"
-	@echo "🗄️  数据库管理:     http://localhost:9035"
+	@echo "🔌 API Gateway:    http://localhost:10033"
+	@echo "🌐 Bridge服务:     ws://localhost:10031 (WebSocket)"
+	@echo "                   udp://localhost:10032 (UDP音频)"
+	@echo "🧠 EchoKit Server: wss://indie.echokit.dev/ws/{visitor_id} (外部AI服务)"
+	@echo "🗄️  数据库管理:     http://localhost:10037"
 	@echo "     邮箱: admin@echo-system.com, 密码: admin123"
-	@echo "💾 Redis管理:      http://localhost:9036"
+	@echo "💾 Redis管理:      http://localhost:10038"
 	@echo "     用户名: admin, 密码: admin123"
-	@echo "📡 MQTT Broker:    localhost:9037"
+	@echo "📡 MQTT Broker:    localhost:10039"
 	@echo ""
 
 # 部署相关命令
 verify: ## 验证完整部署
 	@echo "验证完整部署..."
-	./verify-deployment.sh
+	./scripts/verify-deployment.sh
 
 deploy: ## 完整部署流程
 	@echo "开始完整部署流程..."
@@ -254,7 +243,6 @@ reset: ## 完全重置系统（危险操作）
 	@read confirmation && \
 	if [ "$$confirmation" = "RESET" ]; then \
 		make clean; \
-		rm -rf echokit-server-deployment downloads; \
 		echo "系统已完全重置"; \
 	else \
 		echo "操作已取消"; \

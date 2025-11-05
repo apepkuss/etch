@@ -8,28 +8,29 @@ Echo System 提供了完整的 Docker Compose 部署方案，包含所有必要�
 
 ### 核心服务
 
-| 服务 | 端口 | 描述 |
-|------|------|------|
-| **EchoKit Server** | 9034 | AI推理服务 (ASR/LLM/TTS) |
-| **Bridge** | 9032, 9033 | WebSocket/UDP桥接服务 |
-| **API Gateway** | 9031 | HTTP API服务 |
-| **Web Management** | 9030 | React管理界面 |
-| **PostgreSQL** | 5432 | 主数据库 |
-| **Redis** | 6379 | 缓存服务 |
-| **MQTT Broker** | 9037, 9038 | 消息代理 |
+| 服务 | 主机端口 | 容器端口 | 协议 | 用途 |
+|------|----------|----------|------|------|
+| **API Gateway** | 10033 | 8080 | HTTP | HTTP API服务 |
+| **Web Management** | 10034 | 5174 | HTTP | React管理界面 |
+| **Bridge** | 10031, 10032 | WebSocket/UDP桥接服务 |
+| **PostgreSQL** | 10035 | 主数据库 |
+| **Redis** | 10036 | 缓存服务 |
+| **MQTT Broker** | 10039, 10040 | 消息代理 |
+| **EchoKit Server** | - | 外部AI服务 (https://indie.echokit.dev) |
 
 ### 管理工具
 
 | 服务 | 端口 | 描述 |
 |------|------|------|
-| **pgAdmin** | 9035 | PostgreSQL管理界面 |
-| **Redis Commander** | 9036 | Redis管理界面 |
+| **pgAdmin** | 10037 | PostgreSQL管理界面 |
+| **Redis Commander** | 10038 | Redis管理界面 |
 
 ## 快速开始
 
 ### 1. 环境准备
 
 确保系统已安装以下软件：
+
 - Docker (>= 20.10)
 - Docker Compose (>= 2.0) 或 Docker CLI with Compose plugin
 
@@ -69,26 +70,33 @@ docker compose logs -f
 make verify
 ```
 
-### 5. 访问系统
+### 访问服务
 
-- **Web管理界面**: http://localhost:9030
+部署成功后，可以通过以下地址访问各个服务：
+
+- **Web管理界面**: http://localhost:10034
   - 用户名: `admin`
   - 密码: `admin123`
 
-- **API Gateway**: http://localhost:9031
-- **API健康检查**: http://localhost:9031/health
+- **API Gateway**: http://localhost:10033
+- **API健康检查**: http://localhost:10033/health
 
-- **EchoKit Server**: http://localhost:9034
+- **Bridge服务**:
+  - WebSocket: ws://localhost:10031
+  - UDP音频: udp://localhost:10032
+  - 健康检查: http://localhost:10031/health
 
-- **数据库管理**: http://localhost:9035
+- **EchoKit Server**: <https://indie.echokit.dev> (外部托管服务)
+
+- **数据库管理**: http://localhost:10037
   - 邮箱: `admin@echo-system.com`
   - 密码: `admin123`
 
-- **Redis管理**: http://localhost:9036
+- **Redis管理**: http://localhost:10038
   - 用户名: `admin`
   - 密码: `admin123`
 
-- **MQTT Broker**: localhost:9037
+- **MQTT Broker**: localhost:10039
 
 ## 详细配置
 
@@ -97,41 +105,50 @@ make verify
 参考 `.env.example` 文件中的配置说明：
 
 ```bash
-# 数据库配置
-DATABASE_URL=postgres://echo_user:echo_password@localhost:5432/echo_db
+# 数据库配置（容器内部连接）
+DATABASE_URL=postgres://echo_user:echo_password@postgres:5432/echo_db
 
-# Redis配置
-REDIS_URL=redis://:redis_password@localhost:6379
+# Redis配置（容器内部连接）
+REDIS_URL=redis://:redis_password@redis:6379
 
 # JWT配置
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
 
-# EchoKit Server配置
-ECHOKIT_WEBSOCKET_URL=ws://localhost:9034/v1/realtime
+# EchoKit Server配置（外部服务）
+ECHOKIT_WEBSOCKET_URL=wss://indie.echokit.dev/ws/your-visitor-id
+ECHOKIT_API_BASE_URL=https://indie.echokit.dev
 ```
 
 ### 端口映射
 
-所有端口都配置为 9030 系列以避免冲突：
+所有端口都配置为独立端口以避免冲突：
 
 ```yaml
 services:
   api-gateway:
+    image: echo-api-gateway:latest
     ports:
-      - "9031:8080"  # 主机端口:容器端口
+      - "10033:8080"  # 主机端口:容器端口
+```
+
+**说明：**
+
+- 10034 → Web管理界面 (5174)
+- 10033 → API Gateway (8080)
 ```
 
 **当前端口映射：**
 
-- 9030 → Web管理界面 (5174)
-- 9031 → API Gateway (8080)
-- 9032 → Bridge WebSocket (8082)
-- 9033 → Bridge UDP (8083)
-- 9034 → EchoKit Server (9988)
-- 9035 → pgAdmin (80)
-- 9036 → Redis Commander (8081)
-- 9037 → MQTT Broker (1883)
-- 9038 → MQTT WebSocket (9001)
+- 18084 → Web管理界面 (5174)
+- 18080 → API Gateway (8080)
+- 10031 → Bridge WebSocket (8082)
+- 10032 → Bridge UDP (8083)
+- 10035 → PostgreSQL (5432)
+- 10036 → Redis (6379)
+- 10037 → pgAdmin (80)
+- 10038 → Redis Commander (8081)
+- 10039 → MQTT Broker (1883)
+- 10040 → MQTT WebSocket (9001)
 
 ### 数据持久化
 
@@ -160,7 +177,7 @@ make health          # 检查服务健康状态
 # 日志管理
 make logs            # 查看所有服务日志
 make logs-api        # 查看 API Gateway 日志
-make logs-echokit    # 查看 EchoKit Server 日志
+make logs-bridge     # 查看 Bridge 服务日志
 
 # 数据库和缓存操作
 make db-connect      # 连接数据库
@@ -170,7 +187,9 @@ make redis-flush     # 清空 Redis 缓存
 
 # 服务测试
 make test-api        # 测试 API Gateway 连接
-make test-echokit    # 测试 EchoKit Server 连接
+make test-web        # 测试 Web 界面连接
+make test-bridge     # 测试 Bridge 服务连接
+make test-echokit    # 测试外部 EchoKit Server 连接
 
 # 系统信息
 make info            # 显示系统信息
@@ -247,6 +266,7 @@ services:
 ### 安全配置
 
 1. **更改默认密码**：
+
    ```bash
    # 修改 .env 中的密码
    POSTGRES_PASSWORD=your-secure-password
@@ -254,6 +274,7 @@ services:
    ```
 
 2. **启用HTTPS**：
+
    ```yaml
    # 在 nginx 配置中启用 SSL
    server {
@@ -264,6 +285,7 @@ services:
    ```
 
 3. **网络隔离**：
+
    ```yaml
    # 使用自定义网络
    networks:
@@ -275,6 +297,7 @@ services:
 ### 性能优化
 
 1. **资源限制**：
+
    ```yaml
    services:
      api-gateway:
@@ -286,11 +309,12 @@ services:
    ```
 
 2. **健康检查**：
+
    ```yaml
    services:
      api-gateway:
        healthcheck:
-         test: ["CMD", "curl", "-f", "http://localhost:9031/health"]
+         test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
          interval: 30s
          timeout: 10s
          retries: 3
@@ -299,6 +323,7 @@ services:
 ### 监控和日志
 
 1. **日志收集**：
+
    ```yaml
    logging:
      driver: "json-file"
@@ -308,6 +333,7 @@ services:
    ```
 
 2. **监控集成**：
+
    ```yaml
    # 可选：集成 Prometheus/Grafana
    monitoring:
@@ -321,6 +347,7 @@ services:
 ### 常见问题
 
 1. **服务启动失败**：
+
    ```bash
    # 检查服务状态
    docker compose ps
@@ -330,6 +357,7 @@ services:
    ```
 
 2. **数据库连接失败**：
+
    ```bash
    # 检查网络连接
    docker compose exec api-gateway ping postgres
@@ -339,9 +367,10 @@ services:
    ```
 
 3. **端口冲突**：
+
    ```bash
    # 检查端口占用
-   lsof -i :9031
+   lsof -i :10033
 
    # 修改 docker-compose.yml 中的端口映射
    ```

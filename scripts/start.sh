@@ -71,20 +71,18 @@ create_directories() {
     print_message $GREEN "✓ 目录创建完成"
 }
 
-# 准备 EchoKit Server
-prepare_echokit_server() {
-    print_message $YELLOW "准备 EchoKit Server..."
+# 检查 EchoKit Server 配置
+check_echokit_config() {
+    print_message $YELLOW "检查 EchoKit Server 配置..."
 
-    if [ ! -d "echokit-server-deployment" ]; then
-        print_message $BLUE "下载 EchoKit Server..."
-        if ./scripts/download-echokit-server.sh latest; then
-            print_message $GREEN "✓ EchoKit Server 下载完成"
+    # 检查环境变量
+    if [ -f .env ]; then
+        if grep -q "ECHOKIT_WEBSOCKET_URL" .env 2>/dev/null; then
+            print_message $GREEN "✓ EchoKit Server 配置已设置（使用外部服务）"
         else
-            print_message $RED "✗ EchoKit Server 下载失败"
-            exit 1
+            print_message $YELLOW "⚠ 未找到 ECHOKIT_WEBSOCKET_URL 配置"
+            print_message $YELLOW "  将使用默认配置: wss://indie.echokit.dev/ws/ci-test-visitor"
         fi
-    else
-        print_message $GREEN "✓ EchoKit Server 已准备"
     fi
 }
 
@@ -129,7 +127,7 @@ start_services() {
 wait_for_health() {
     print_message $YELLOW "等待服务健康检查..."
 
-    local services=("postgres" "redis" "echokit-server" "bridge" "api-gateway" "web-management")
+    local services=("postgres" "redis" "bridge" "api-gateway" "web-management")
     local max_attempts=30
     local attempt=1
 
@@ -172,16 +170,19 @@ show_status() {
 
     echo
     print_message $BLUE "访问地址:"
-    echo "  📱 Web管理界面:    http://localhost:9030 (admin/admin123)"
-    echo "  🔌 API Gateway:    http://localhost:9031"
-    echo "  🧠 EchoKit Server: http://localhost:9034"
-    echo "  🗄️  数据库管理:     http://localhost:9035"
-    echo "  💾 Redis管理:      http://localhost:9036"
-    echo "  📡 MQTT Broker:    localhost:9037"
+    echo "  📱 Web管理界面:    http://localhost:10034 (admin/admin123)"
+    echo "  🔌 API Gateway:    http://localhost:10033"
+    echo "  🌐 Bridge服务:     ws://localhost:10031 (WebSocket)"
+    echo "                     udp://localhost:10032 (UDP音频)"
+    echo "  🧠 EchoKit Server: https://indie.echokit.dev (外部服务)"
+    echo "  🗄️  数据库管理:     http://localhost:10037 (admin@echo-system.com/admin123)"
+    echo "  💾 Redis管理:      http://localhost:10038 (admin/admin123)"
+    echo "  📡 MQTT Broker:    localhost:10039"
     echo
     print_message $BLUE "健康检查:"
-    echo "  🟢 API健康检查:    http://localhost:9031/health"
-    echo "  🟢 Web健康检查:    http://localhost:9030/health"
+    echo "  🟢 API健康检查:    http://localhost:10033/health"
+    echo "  🟢 Web健康检查:    http://localhost:10034/health"
+    echo "  🟢 Bridge健康:     http://localhost:10031/health"
     echo
 }
 
@@ -212,7 +213,7 @@ main() {
             check_dependencies
             check_env_file
             create_directories
-            prepare_echokit_server
+            check_echokit_config
             pull_images
             build_images
             start_services
