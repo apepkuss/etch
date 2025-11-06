@@ -21,6 +21,8 @@ pub struct EchoKitSessionAdapter {
     audio_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, Vec<u8>)>>>>,
     /// ASR 接收通道
     asr_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, String)>>>>,
+    /// 原始消息接收通道（用于直接转发 MessagePack 数据）
+    raw_message_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, Vec<u8>)>>>>,
 }
 
 impl EchoKitSessionAdapter {
@@ -30,6 +32,7 @@ impl EchoKitSessionAdapter {
         connection_manager: Arc<DeviceConnectionManager>,
         audio_receiver: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
         asr_receiver: mpsc::UnboundedReceiver<(String, String)>,
+        raw_message_receiver: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
     ) -> Self {
         Self {
             echokit_client,
@@ -37,6 +40,7 @@ impl EchoKitSessionAdapter {
             session_mapping: Arc::new(RwLock::new(HashMap::new())),
             audio_receiver: Arc::new(RwLock::new(Some(audio_receiver))),
             asr_receiver: Arc::new(RwLock::new(Some(asr_receiver))),
+            raw_message_receiver: Arc::new(RwLock::new(Some(raw_message_receiver))),
         }
     }
 
@@ -54,6 +58,12 @@ impl EchoKitSessionAdapter {
             "Creating EchoKit session: bridge={}, device={}, echokit={}",
             bridge_session_id, device_id, echokit_session_id
         );
+
+        // 🔑 关键修复：在调用 start_session 之前，立即在 active_sessions 中预注册
+        // 这样可以确保当 EchoKit Server 返回 HelloChunk 时，转发循环能找到 session
+        self.echokit_client
+            .pre_register_session(echokit_session_id.clone(), device_id.clone())
+            .await;
 
         // 调用 EchoKit 客户端启动会话
         self.echokit_client
@@ -93,7 +103,7 @@ impl EchoKitSessionAdapter {
             echokit_session_id
         );
 
-        // 发送音频到 EchoKit
+        // 发送音频到 EchoKit（StartChat已在会话创建时发送）
         self.echokit_client
             .send_audio_data(
                 echokit_session_id,
@@ -104,6 +114,49 @@ impl EchoKitSessionAdapter {
             )
             .await
             .with_context(|| "Failed to send audio to EchoKit")?;
+
+        Ok(())
+    }
+
+    /// 提交音频进行处理（发送Submit消息到EchoKit）
+    pub async fn submit_audio_for_processing(&self, bridge_session_id: &str) -> Result<()> {
+        // 获取映射信息
+        let mapping = self.session_mapping.read().await;
+        let (device_id, echokit_session_id) = mapping
+            .get(bridge_session_id)
+            .ok_or_else(|| anyhow::anyhow!("Session {} not found", bridge_session_id))?
+            .clone();
+        drop(mapping);
+
+        info!(
+            "📤 Submitting audio for processing: bridge={}, echokit={}",
+            bridge_session_id, echokit_session_id
+        );
+
+        // 发送Submit命令到EchoKit
+        self.echokit_client
+            .send_submit_command()
+            .await
+            .with_context(|| "Failed to send submit command to EchoKit")?;
+
+        info!("✅ Submit command sent successfully to EchoKit");
+        Ok(())
+    }
+
+    /// 发送StartChat命令到EchoKit（开始新的对话会话）
+    pub async fn send_start_chat(&self, echokit_session_id: &str) -> Result<()> {
+        info!("📤 Sending StartChat command to EchoKit for session {}", echokit_session_id);
+
+        self.echokit_client
+            .send_start_chat_command()
+            .await
+            .with_context(|| "Failed to send StartChat command to EchoKit")?;
+
+        info!("✅ StartChat command sent successfully to EchoKit for session {}", echokit_session_id);
+
+        // 🎁 发送完 StartChat 后，立即发送缓存的 Hello 消息
+        info!("🎁 Triggering cached Hello messages for session {}", echokit_session_id);
+        self.echokit_client.check_and_send_cached_hello(echokit_session_id).await;
 
         Ok(())
     }
@@ -237,7 +290,7 @@ impl EchoKitSessionAdapter {
 
     /// 启动 ASR 接收器（从 EchoKit 接收 ASR 结果并路由到设备）
     pub async fn start_asr_receiver(self: Arc<Self>) {
-        info!("Starting EchoKit ASR receiver");
+        info!("🎙️ Starting EchoKit ASR receiver");
 
         // 获取 ASR 接收通道
         let mut asr_rx = {
@@ -246,29 +299,38 @@ impl EchoKitSessionAdapter {
         };
 
         if asr_rx.is_none() {
-            error!("ASR receiver channel not available");
+            error!("❌ ASR receiver channel not available");
             return;
         }
 
         let mut asr_rx = asr_rx.unwrap();
+        info!("✅ ASR receiver channel acquired, waiting for messages...");
 
         // 持续监听 ASR 数据
         while let Some((echokit_session_id, asr_text)) = asr_rx.recv().await {
-            debug!(
-                "Received ASR from EchoKit session {}: {}",
+            info!(
+                "📝 Received ASR from EchoKit session {}: {}",
                 echokit_session_id, asr_text
             );
 
             // 根据 echokit_session_id 找到对应的 device_id
             let device_id = {
                 let mapping = self.session_mapping.read().await;
-                mapping
+                let device_id = mapping
                     .iter()
                     .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
-                    .map(|(_, (dev_id, _))| dev_id.clone())
+                    .map(|(_, (dev_id, _))| dev_id.clone());
+
+                if device_id.is_none() {
+                    warn!("⚠️ No device found for EchoKit session {} in mapping", echokit_session_id);
+                    debug!("Current session mapping: {:?}", *mapping);
+                }
+                device_id
             };
 
             if let Some(device_id) = device_id {
+                info!("🎯 Found device {} for ASR, forwarding...", device_id);
+
                 // 发送 ASR 事件到设备
                 match self
                     .connection_manager
@@ -281,27 +343,89 @@ impl EchoKitSessionAdapter {
                     .await
                 {
                     Ok(_) => {
-                        debug!(
-                            "Forwarded ASR to device {}: {}",
+                        info!(
+                            "✅ Successfully forwarded ASR to device {}: {}",
                             device_id, asr_text
                         );
                     }
                     Err(e) => {
                         error!(
-                            "Failed to forward ASR to device {}: {}",
+                            "❌ Failed to forward ASR to device {}: {}",
                             device_id, e
                         );
                     }
                 }
             } else {
                 warn!(
-                    "No device found for EchoKit session {} (ASR: {})",
+                    "⚠️ No device found for EchoKit session {} (ASR: {})",
                     echokit_session_id, asr_text
                 );
             }
         }
 
         info!("ASR receiver stopped");
+    }
+
+    /// 启动原始消息接收器（直接转发 MessagePack 数据到设备）
+    pub async fn start_raw_message_receiver(self: Arc<Self>) {
+        info!("📦 Starting EchoKit raw message receiver");
+
+        // 获取原始消息接收通道
+        let mut raw_msg_rx = {
+            let mut receiver_guard = self.raw_message_receiver.write().await;
+            receiver_guard.take()
+        };
+
+        if raw_msg_rx.is_none() {
+            error!("❌ Raw message receiver channel not available");
+            return;
+        }
+
+        let mut raw_msg_rx = raw_msg_rx.unwrap();
+        info!("✅ Raw message receiver channel acquired, waiting for messages...");
+
+        // 持续监听原始消息数据
+        while let Some((echokit_session_id, raw_data)) = raw_msg_rx.recv().await {
+            debug!(
+                "📦 Received raw message from EchoKit session {}: {} bytes",
+                echokit_session_id,
+                raw_data.len()
+            );
+
+            // 根据 echokit_session_id 找到对应的 device_id
+            let device_id = {
+                let mapping = self.session_mapping.read().await;
+                mapping
+                    .iter()
+                    .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
+                    .map(|(_, (dev_id, _))| dev_id.clone())
+            };
+
+            if let Some(device_id) = device_id {
+                // 直接发送原始二进制数据到设备
+                match self.connection_manager.send_binary(&device_id, raw_data).await {
+                    Ok(_) => {
+                        debug!(
+                            "✅ Successfully forwarded raw message to device {}",
+                            device_id
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "❌ Failed to forward raw message to device {}: {}",
+                            device_id, e
+                        );
+                    }
+                }
+            } else {
+                warn!(
+                    "⚠️ No device found for EchoKit session {} (raw message)",
+                    echokit_session_id
+                );
+            }
+        }
+
+        info!("Raw message receiver stopped");
     }
 
     /// 关闭 EchoKit 会话

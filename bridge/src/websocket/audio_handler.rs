@@ -101,6 +101,26 @@ async fn handle_device_websocket(
             Ok(Message::Binary(audio_data)) => {
                 // 处理音频数据
                 if let Some(session_id) = &active_session {
+                    info!(
+                        "📊 Received audio data: {} bytes for session {}",
+                        audio_data.len(),
+                        session_id
+                    );
+
+                    // 验证音频格式（16-bit PCM, 应该是偶数字节）
+                    if audio_data.len() % 2 != 0 {
+                        warn!("⚠️ Audio data length is odd: {} bytes (expecting 16-bit PCM)", audio_data.len());
+                    }
+
+                    // 采样率验证（假设1秒音频应该是32000字节 = 16000样本 * 2字节）
+                    let estimated_samples = audio_data.len() / 2;
+                    let estimated_duration_ms = (estimated_samples as f32 / 16.0) as u32; // 16样本/ms @ 16kHz
+                    info!(
+                        "📊 Audio stats: ~{} samples, ~{}ms @ 16kHz",
+                        estimated_samples,
+                        estimated_duration_ms
+                    );
+
                     if let Err(e) = forward_audio_to_echokit(
                         session_id,
                         audio_data.to_vec(), // Convert Bytes to Vec<u8>
@@ -291,6 +311,30 @@ async fn handle_client_command(
             // 使用传入的 record_mode 参数，或从命令判断（向后兼容）
             let is_record = record_mode || cmd.is_record_mode();
 
+            // 如果已有活跃会话，先清理（支持多轮对话）
+            if let Some(old_session_id) = active_session.take() {
+                info!(
+                    "🔄 Device {} starting new session, cleaning up old session {}",
+                    device_id, old_session_id
+                );
+
+                // 关闭旧的 EchoKit 会话
+                if let Err(e) = state.echokit_adapter
+                    .close_echokit_session(&old_session_id)
+                    .await
+                {
+                    error!("Failed to close old EchoKit session: {}", e);
+                }
+
+                // 清理旧会话
+                if let Err(e) = state.session_manager.end_session(&old_session_id).await {
+                    error!("Failed to end old session: {}", e);
+                }
+                if let Err(e) = state.connection_manager.unbind_session(&old_session_id).await {
+                    error!("Failed to unbind old session: {}", e);
+                }
+            }
+
             // 创建新会话
             let session_id = generate_session_id();
             info!(
@@ -312,7 +356,7 @@ async fn handle_client_command(
             // 只有对话模式才创建 EchoKit 会话
             if !is_record {
                 let echokit_config = echo_shared::EchoKitConfig::default();
-                if let Err(e) = state.echokit_adapter
+                match state.echokit_adapter
                     .create_echokit_session(
                         session_id.clone(),
                         device_id.to_string(),
@@ -320,7 +364,23 @@ async fn handle_client_command(
                     )
                     .await
                 {
-                    error!("Failed to create EchoKit session: {}", e);
+                    Err(e) => {
+                        error!("Failed to create EchoKit session: {}", e);
+                    }
+                    Ok(echokit_session_id) => {
+                        // EchoKit 会话创建成功
+                        info!("EchoKit session {} created for bridge session {}, waiting for StartChat command",
+                              echokit_session_id, session_id);
+
+                        // 转发 StartChat 命令给 EchoKit
+                        if matches!(cmd, ClientCommand::StartChat) {
+                            if let Err(e) = state.echokit_adapter.send_start_chat(&echokit_session_id).await {
+                                error!("Failed to send StartChat command to EchoKit: {}", e);
+                            } else {
+                                info!("📤 StartChat command forwarded to EchoKit for session {}", echokit_session_id);
+                            }
+                        }
+                    }
                 }
             } else {
                 info!("Record mode: skipping EchoKit session creation");
@@ -338,9 +398,19 @@ async fn handle_client_command(
             if let Some(session_id) = active_session {
                 info!("Device {} submitted audio for session {}", device_id, session_id);
 
-                // 标记音频流结束，EchoKit 会开始处理
-                // 实际的音频数据已经通过 Binary 消息发送
+                // 通知EchoKit Server处理音频
+                // EchoKit期望收到Submit消息来触发ASR处理
+                if let Err(e) = state.echokit_adapter.submit_audio_for_processing(session_id).await {
+                    error!("Failed to submit audio to EchoKit for processing: {}", e);
+                }
+
                 debug!("Audio submission completed for session {}", session_id);
+
+                // 注意：不在这里清理会话
+                // 会话会在收到 EchoKit 的 EndAudio 或 EndResponse 事件后自动清理
+                // 或者在下一次 StartChat/StartRecord 时创建新会话时清理旧会话
+                // 这样可以确保客户端接收到完整的响应（ASR + 音频）
+                info!("💡 Session {} remains active to receive responses", session_id);
             } else {
                 warn!("Received Submit without active session from device {}", device_id);
             }

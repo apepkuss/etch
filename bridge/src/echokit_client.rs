@@ -25,6 +25,9 @@ pub struct EchoKitClient {
     active_sessions: Arc<RwLock<HashMap<String, String>>>, // session_id -> device_id
     audio_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, audio_data)
     asr_callback: Option<mpsc::UnboundedSender<(String, String)>>, // (session_id, asr_text)
+    raw_message_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, raw_messagepack_data)
+    cached_hello_messages: Arc<RwLock<Vec<Vec<u8>>>>, // 缓存 HelloChunk 消息，用于新会话
+    pending_hello_sessions: Arc<RwLock<Vec<String>>>, // 等待发送缓存 Hello 的会话列表
 }
 
 impl EchoKitClient {
@@ -41,6 +44,9 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: None,
             asr_callback: None,
+            raw_message_callback: None,
+            cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
+            pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -61,6 +67,9 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
             asr_callback: None,
+            raw_message_callback: None,
+            cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
+            pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -82,6 +91,34 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
             asr_callback: Some(asr_callback),
+            raw_message_callback: None,
+            cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
+            pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Create a new EchoKitClient with audio, ASR, and raw message callback support
+    pub fn new_with_all_callbacks(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+        asr_callback: mpsc::UnboundedSender<(String, String)>,
+        raw_message_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+    ) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        Self {
+            websocket_url,
+            ws_stream: Arc::new(RwLock::new(None)),
+            is_connected: Arc::new(RwLock::new(false)),
+            service_status: Arc::new(RwLock::new(None)),
+            message_sender: tx,
+            message_receiver: Arc::new(RwLock::new(Some(rx))),
+            active_sessions: Arc::new(RwLock::new(HashMap::new())),
+            audio_callback: Some(audio_callback),
+            asr_callback: Some(asr_callback),
+            raw_message_callback: Some(raw_message_callback),
+            cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
+            pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -146,16 +183,24 @@ impl EchoKitClient {
             return Err(anyhow::anyhow!("Not connected to EchoKit Server"));
         }
 
-        // 记录会话信息
+        // 记录会话信息（仅当尚未注册时才插入，避免覆盖 pre_register_session 的注册）
         if let EchoKitClientMessage::StartSession { session_id, device_id, .. } = &message {
-            self.active_sessions.write().await.insert(session_id.clone(), device_id.clone());
+            let mut sessions = self.active_sessions.write().await;
+            if !sessions.contains_key(session_id) {
+                info!("🔑 Registering session {} in active_sessions (from send_message)", session_id);
+                sessions.insert(session_id.clone(), device_id.clone());
+                let count = sessions.len();
+                info!("📊 Active sessions count after insert: {}", count);
+            } else {
+                info!("✅ Session {} already registered (pre-registered)", session_id);
+            }
         }
 
         // 实现WebSocket消息发送
         let json_message = serde_json::to_string(&message)
             .with_context(|| "Failed to serialize message")?;
 
-        debug!("Sending message to EchoKit Server: {}", json_message);
+        info!("📤 Sending message to EchoKit Server: {}", json_message);
 
         // 获取WebSocket流并发送消息
         let mut ws_stream_guard = self.ws_stream.write().await;
@@ -177,6 +222,61 @@ impl EchoKitClient {
     pub async fn send_service_ready(&self) -> Result<()> {
         info!("Sending initial session update to EchoKit Server as service ready signal");
         self.send_session_update().await
+    }
+
+    // 🔑 预注册会话（在 start_session 之前调用）
+    // 这样可以确保当 HelloChunk 到达时，active_sessions 已经有该会话
+    pub async fn pre_register_session(&self, session_id: String, device_id: String) {
+        info!(
+            "🔑 Pre-registering session {} for device {} in active_sessions",
+            session_id, device_id
+        );
+        self.active_sessions.write().await.insert(session_id.clone(), device_id);
+        let count = self.active_sessions.read().await.len();
+        info!("📊 Active sessions count after pre-register: {}", count);
+
+        // 🎁 将会话加入待发送缓存 Hello 的列表
+        // 实际发送会在首次接收到该会话的消息处理请求时进行
+        self.pending_hello_sessions.write().await.push(session_id.clone());
+        info!("📝 Session {} added to pending hello list", session_id);
+    }
+
+    // 🎁 检查并发送缓存的 Hello 消息给指定会话（如果是首次）
+    pub async fn check_and_send_cached_hello(&self, session_id: &str) {
+        // 检查是否在待发送列表中
+        let mut pending = self.pending_hello_sessions.write().await;
+        if let Some(pos) = pending.iter().position(|s| s == session_id) {
+            // 从待发送列表中移除
+            pending.remove(pos);
+            drop(pending); // 释放锁
+
+            info!("🎁 Session {} ready for cached Hello messages", session_id);
+
+            let cached_messages = self.cached_hello_messages.read().await;
+            if cached_messages.is_empty() {
+                info!("⚠️ No cached Hello messages to send to session {}", session_id);
+                return;
+            }
+
+            info!("🎁 Sending {} cached Hello messages to session {}", cached_messages.len(), session_id);
+
+            if let Some(callback) = &self.raw_message_callback {
+                for (i, data) in cached_messages.iter().enumerate() {
+                    info!("📤 Forwarding cached Hello message {} ({} bytes) to session {}", i + 1, data.len(), session_id);
+                    if let Err(e) = callback.send((session_id.to_string(), data.clone())) {
+                        error!("❌ Failed to send cached Hello message to session {}: {}", session_id, e);
+                    } else {
+                        info!("✅ Cached Hello message {} forwarded successfully", i + 1);
+                    }
+
+                    // 添加小延迟，确保每条消息作为独立的 WebSocket 帧发送
+                    // 避免多条消息在网络层被合并
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                }
+            } else {
+                warn!("⚠️ No raw message callback available for sending cached Hello messages");
+            }
+        }
     }
 
     // 开始会话
@@ -214,7 +314,7 @@ impl EchoKitClient {
         self.send_message(message).await
     }
 
-    // 发送音频数据
+    // 发送音频数据（直接发送二进制，不使用JSON）
     pub async fn send_audio_data(
         &self,
         session_id: String,
@@ -223,15 +323,89 @@ impl EchoKitClient {
         format: AudioFormat,
         is_final: bool,
     ) -> Result<()> {
-        let message = EchoKitClientMessage::AudioData {
-            session_id,
-            device_id,
-            audio_data,
+        if !self.is_connected().await {
+            return Err(anyhow::anyhow!("Not connected to EchoKit Server"));
+        }
+
+        info!(
+            "📤 Sending audio data: {} bytes (format: {:?}, final: {}) for session {}",
+            audio_data.len(),
             format,
             is_final,
-        };
+            session_id
+        );
 
-        self.send_message(message).await
+        // 直接发送二进制音频数据（不使用JSON）
+        // EchoKit Server期望16-bit PCM音频作为Binary WebSocket消息
+        let mut ws_stream_guard = self.ws_stream.write().await;
+        if let Some(ws_stream) = ws_stream_guard.as_mut() {
+            if let Err(e) = ws_stream.send(Message::Binary(audio_data.clone())).await {
+                error!("Failed to send audio data to EchoKit Server: {}", e);
+                *self.is_connected.write().await = false;
+                return Err(anyhow::anyhow!("WebSocket send error: {}", e));
+            }
+            info!("✅ Audio data sent successfully to EchoKit Server");
+        } else {
+            return Err(anyhow::anyhow!("WebSocket stream not available"));
+        }
+
+        Ok(())
+    }
+
+    // 发送StartChat命令（通知EchoKit开始对话）
+    pub async fn send_start_chat_command(&self) -> Result<()> {
+        if !self.is_connected().await {
+            return Err(anyhow::anyhow!("Not connected to EchoKit Server"));
+        }
+
+        info!("📤 Sending StartChat command to EchoKit Server");
+
+        // 发送StartChat JSON消息
+        let start_chat_message = serde_json::json!({"event": "StartChat"});
+        let json_message = serde_json::to_string(&start_chat_message)
+            .with_context(|| "Failed to serialize StartChat message")?;
+
+        let mut ws_stream_guard = self.ws_stream.write().await;
+        if let Some(ws_stream) = ws_stream_guard.as_mut() {
+            if let Err(e) = ws_stream.send(Message::Text(json_message)).await {
+                error!("Failed to send StartChat command to EchoKit Server: {}", e);
+                *self.is_connected.write().await = false;
+                return Err(anyhow::anyhow!("WebSocket send error: {}", e));
+            }
+            info!("✅ StartChat command sent successfully to EchoKit Server");
+        } else {
+            return Err(anyhow::anyhow!("WebSocket stream not available"));
+        }
+
+        Ok(())
+    }
+
+    // 发送Submit命令（通知EchoKit处理音频）
+    pub async fn send_submit_command(&self) -> Result<()> {
+        if !self.is_connected().await {
+            return Err(anyhow::anyhow!("Not connected to EchoKit Server"));
+        }
+
+        info!("📤 Sending Submit command to EchoKit Server");
+
+        // 发送Submit JSON消息
+        let submit_message = serde_json::json!({"event": "Submit"});
+        let json_message = serde_json::to_string(&submit_message)
+            .with_context(|| "Failed to serialize Submit message")?;
+
+        let mut ws_stream_guard = self.ws_stream.write().await;
+        if let Some(ws_stream) = ws_stream_guard.as_mut() {
+            if let Err(e) = ws_stream.send(Message::Text(json_message)).await {
+                error!("Failed to send Submit command to EchoKit Server: {}", e);
+                *self.is_connected.write().await = false;
+                return Err(anyhow::anyhow!("WebSocket send error: {}", e));
+            }
+            info!("✅ Submit command sent successfully to EchoKit Server");
+        } else {
+            return Err(anyhow::anyhow!("WebSocket stream not available"));
+        }
+
+        Ok(())
     }
 
     // 发送 Ping
@@ -285,6 +459,9 @@ impl EchoKitClient {
         let active_sessions = self.active_sessions.clone();
         let audio_callback = self.audio_callback.clone();
         let asr_callback = self.asr_callback.clone();
+        let raw_message_callback = self.raw_message_callback.clone();
+        let cached_hello_messages = self.cached_hello_messages.clone();
+        let pending_hello_sessions = self.pending_hello_sessions.clone();
 
         // 为每个连接创建独立的消息通道
         let (tx, mut rx) = mpsc::unbounded_channel::<EchoKitClientMessage>();
@@ -303,7 +480,7 @@ impl EchoKitClient {
                     } => {
                         match message_result {
                             Some(Ok(Message::Text(text))) => {
-                                debug!("Received text message from EchoKit Server: {}", text);
+                                info!("📩 Received text message from EchoKit Server: {}", text);
                                 if let Err(e) = Self::handle_server_message(
                                     text,
                                     &service_status,
@@ -314,15 +491,95 @@ impl EchoKitClient {
                                 }
                             }
                             Some(Ok(Message::Binary(data))) => {
-                                debug!("Received binary data from EchoKit Server: {} bytes", data.len());
-                                // 处理二进制音频数据
-                                if let Err(e) = Self::handle_binary_audio_data(
-                                    data,
-                                    &service_status,
-                                    &active_sessions,
-                                    &audio_callback,
-                                ).await {
-                                    error!("Error handling binary audio data: {}", e);
+                                info!("📦 Received binary data from EchoKit Server: {} bytes", data.len());
+
+                                // 首先尝试作为MessagePack解析
+                                match rmpv::decode::read_value(&mut &data[..]) {
+                                    Ok(msgpack_value) => {
+                                        info!("📦 Parsed as MessagePack: {:?}", msgpack_value);
+
+                                        // 🎁 检查是否是 Hello 相关消息，如果是则缓存
+                                        let should_cache = Self::should_cache_hello_message(&msgpack_value);
+                                        if should_cache {
+                                            info!("🎁 Caching Hello-related message ({} bytes)", data.len());
+                                            cached_hello_messages.write().await.push(data.clone());
+                                            let cache_size = cached_hello_messages.read().await.len();
+                                            info!("📦 Cached messages count: {}", cache_size);
+                                        }
+
+                                        // 对于所有MessagePack消息，直接转发原始数据给所有活跃会话
+                                        // 客户端会自己解析MessagePack
+                                        let sessions = active_sessions.read().await;
+                                        info!("📊 Active sessions count: {}", sessions.len());
+                                        for (session_id, _) in sessions.iter() {
+                                            // 🎁 首次发送时检查并发送缓存的 Hello
+                                            // 使用 pending_hello_sessions 来确保只发送一次
+                                            {
+                                                let pending = pending_hello_sessions.read().await;
+                                                if pending.contains(session_id) {
+                                                    drop(pending); // 释放读锁
+                                                    info!("🎁 Detected first message for session {}, sending cached Hello first", session_id);
+
+                                                    // 发送缓存的 Hello
+                                                    let mut pending_write = pending_hello_sessions.write().await;
+                                                    if let Some(pos) = pending_write.iter().position(|s| s == session_id) {
+                                                        pending_write.remove(pos);
+                                                        drop(pending_write); // 释放写锁
+
+                                                        let cached_messages = cached_hello_messages.read().await;
+                                                        if !cached_messages.is_empty() {
+                                                            info!("🎁 Sending {} cached Hello messages to session {}", cached_messages.len(), session_id);
+
+                                                            if let Some(callback) = &raw_message_callback {
+                                                                for (i, data) in cached_messages.iter().enumerate() {
+                                                                    info!("📤 Forwarding cached Hello message {} ({} bytes)", i + 1, data.len());
+                                                                    if let Err(e) = callback.send((session_id.clone(), data.clone())) {
+                                                                        error!("❌ Failed to send cached Hello message: {}", e);
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                warn!("⚠️ No raw message callback available for sending cached Hello");
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // 然后发送当前消息
+                                            if let Some(callback) = &audio_callback {
+                                                info!("📤 Forwarding MessagePack data to session: {}", session_id);
+                                                if let Err(e) = callback.send((session_id.clone(), data.clone())) {
+                                                    error!("❌ Failed to forward MessagePack to session {}: {}", session_id, e);
+                                                } else {
+                                                    info!("✅ MessagePack forwarded successfully to session {}", session_id);
+                                                }
+                                            } else {
+                                                warn!("⚠️ No audio callback available for forwarding");
+                                            }
+                                        }
+
+                                        // 额外处理ASR事件，用于日志记录和其他内部逻辑
+                                        if let Err(e) = Self::handle_messagepack_data(
+                                            msgpack_value,
+                                            &active_sessions,
+                                            &audio_callback,
+                                            &asr_callback,
+                                            &cached_hello_messages,
+                                        ).await {
+                                            warn!("Error handling MessagePack data: {}", e);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // 不是MessagePack，当作原始音频数据处理
+                                        if let Err(e) = Self::handle_binary_audio_data(
+                                            data,
+                                            &service_status,
+                                            &active_sessions,
+                                            &audio_callback,
+                                        ).await {
+                                            error!("Error handling binary audio data: {}", e);
+                                        }
+                                    }
                                 }
                             }
                             Some(Ok(Message::Close(close_frame))) => {
@@ -436,16 +693,19 @@ impl EchoKitClient {
                 is_final,
                 timestamp: _
             } => {
-                info!("Transcription for session {}: {} (confidence: {:.2}, final: {})",
+                info!("📝 Received Transcription for session {}: {} (confidence: {:.2}, final: {})",
                       session_id, text, confidence, is_final);
 
                 // Forward ASR results via callback if available
                 if let Some(callback) = asr_callback {
+                    info!("Attempting to forward ASR via callback...");
                     if let Err(e) = callback.send((session_id.clone(), text.clone())) {
-                        warn!("Failed to send ASR result via callback: {}", e);
+                        error!("❌ Failed to send ASR result via callback: {}", e);
                     } else {
-                        debug!("Forwarded ASR result for session {}", session_id);
+                        info!("✅ Successfully forwarded ASR result for session {} to callback", session_id);
                     }
+                } else {
+                    warn!("⚠️ No ASR callback available to forward transcription");
                 }
             }
             EchoKitServerMessage::Response {
@@ -530,6 +790,25 @@ impl EchoKitConnectionManager {
         }
     }
 
+    /// Create a new connection manager with audio, ASR, and raw message callback support
+    pub fn new_with_all_callbacks(
+        websocket_url: String,
+        audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+        asr_callback: mpsc::UnboundedSender<(String, String)>,
+        raw_message_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
+    ) -> Self {
+        Self {
+            client: Arc::new(EchoKitClient::new_with_all_callbacks(
+                websocket_url,
+                audio_callback,
+                asr_callback,
+                raw_message_callback
+            )),
+            reconnect_interval: tokio::time::Duration::from_secs(5),
+            max_reconnect_attempts: 10,
+        }
+    }
+
     // 启动连接管理器
     pub async fn start(&self) -> Result<()> {
         let client = self.client.clone();
@@ -580,6 +859,215 @@ impl EchoKitConnectionManager {
 }
 
 impl EchoKitClient {
+    // 判断是否应该缓存 Hello 相关消息
+    fn should_cache_hello_message(value: &rmpv::Value) -> bool {
+        use rmpv::Value;
+
+        match value {
+            Value::String(s) => {
+                let event_str = s.as_str().unwrap_or("");
+                matches!(event_str, "HelloStart" | "HelloEnd")
+            }
+            Value::Map(entries) => {
+                for (key, _) in entries {
+                    if let Value::String(key_str) = key {
+                        let event_type = key_str.as_str().unwrap_or("");
+                        if event_type == "HelloChunk" {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    // 处理MessagePack格式的数据（可能包含ASR等事件）
+    async fn handle_messagepack_data(
+        value: rmpv::Value,
+        active_sessions: &Arc<RwLock<HashMap<String, String>>>,
+        audio_callback: &Option<mpsc::UnboundedSender<(String, Vec<u8>)>>,
+        asr_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
+        cached_hello_messages: &Arc<RwLock<Vec<Vec<u8>>>>,
+    ) -> Result<()> {
+        use rmpv::Value;
+
+        // MessagePack可能是字符串事件或对象事件
+        match value {
+            Value::String(s) => {
+                let event_str = s.into_str().unwrap_or_default();
+                info!("📦 MessagePack string event: {}", event_str);
+
+                // 处理字符串事件如 "HelloStart", "HelloEnd", "EndAudio" 等
+                // 这些事件需要通过特定的格式发送给客户端
+                match event_str.as_str() {
+                    "HelloStart" => {
+                        info!("🎯 Received HelloStart - clearing cached Hello messages");
+                        // 清空之前的缓存，准备缓存新的 Hello 序列
+                        cached_hello_messages.write().await.clear();
+
+                        info!("🎯 Forwarding event to clients: {}", event_str);
+                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
+                        let event_json = serde_json::json!({
+                            "event": event_str
+                        }).to_string();
+                        let event_bytes = event_json.as_bytes().to_vec();
+
+                        // 缓存 HelloStart
+                        cached_hello_messages.write().await.push(event_bytes.clone());
+
+                        // 转发到所有活跃会话
+                        let sessions = active_sessions.read().await;
+                        for (session_id, _) in sessions.iter() {
+                            if let Some(callback) = audio_callback {
+                                info!("📤 Forwarding {} event to session: {}", event_str, session_id);
+                                if let Err(e) = callback.send((session_id.clone(), event_bytes.clone())) {
+                                    error!("❌ Failed to send {} event to session {}: {}", event_str, session_id, e);
+                                } else {
+                                    info!("✅ Successfully forwarded {} event to session {}", event_str, session_id);
+                                }
+                            }
+                        }
+                    }
+                    "HelloEnd" => {
+                        info!("🎯 Received HelloEnd - finalizing cached Hello messages");
+                        info!("🎯 Forwarding event to clients: {}", event_str);
+                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
+                        let event_json = serde_json::json!({
+                            "event": event_str
+                        }).to_string();
+                        let event_bytes = event_json.as_bytes().to_vec();
+
+                        // 缓存 HelloEnd
+                        cached_hello_messages.write().await.push(event_bytes.clone());
+                        let cache_size = cached_hello_messages.read().await.len();
+                        info!("✅ Cached Hello sequence complete: {} messages", cache_size);
+
+                        // 转发到所有活跃会话
+                        let sessions = active_sessions.read().await;
+                        for (session_id, _) in sessions.iter() {
+                            if let Some(callback) = audio_callback {
+                                info!("📤 Forwarding {} event to session: {}", event_str, session_id);
+                                if let Err(e) = callback.send((session_id.clone(), event_bytes.clone())) {
+                                    error!("❌ Failed to send {} event to session {}: {}", event_str, session_id, e);
+                                } else {
+                                    info!("✅ Successfully forwarded {} event to session {}", event_str, session_id);
+                                }
+                            }
+                        }
+                    }
+                    "EndAudio" | "EndResponse" => {
+                        info!("🎯 Forwarding event to clients: {}", event_str);
+
+                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
+                        let event_json = serde_json::json!({
+                            "event": event_str
+                        }).to_string();
+                        let event_bytes = event_json.as_bytes().to_vec();
+
+                        // 转发到所有活跃会话
+                        let sessions = active_sessions.read().await;
+                        for (session_id, _) in sessions.iter() {
+                            if let Some(callback) = audio_callback {
+                                info!("📤 Forwarding {} event to session: {}", event_str, session_id);
+                                if let Err(e) = callback.send((session_id.clone(), event_bytes.clone())) {
+                                    error!("❌ Failed to send {} event to session {}: {}", event_str, session_id, e);
+                                } else {
+                                    info!("✅ Successfully forwarded {} event to session {}", event_str, session_id);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        debug!("📦 Unhandled string event: {}", event_str);
+                    }
+                }
+            }
+            Value::Map(entries) => {
+                // 对象事件，如 {ASR: ["转录文本"]}, {HelloChunk: [音频数据]}
+                for (key, val) in entries {
+                    if let Value::String(key_str) = key {
+                        let event_type = key_str.into_str().unwrap_or_default();
+                        info!("📦 MessagePack object event: {}", event_type);
+
+                        match event_type.as_str() {
+                            "ASR" => {
+                                // ASR事件：提取转录文本
+                                if let Value::Array(arr) = val {
+                                    if let Some(Value::String(text_val)) = arr.first() {
+                                        let asr_text = text_val.as_str().unwrap_or("");
+                                        info!("📝 Received ASR from EchoKit: {}", asr_text);
+
+                                        // 转发ASR到所有活跃会话
+                                        let sessions = active_sessions.read().await;
+                                        for (session_id, _) in sessions.iter() {
+                                            if let Some(callback) = asr_callback {
+                                                info!("📤 Forwarding ASR to session: {}", session_id);
+                                                if let Err(e) = callback.send((session_id.clone(), asr_text.to_string())) {
+                                                    error!("❌ Failed to send ASR to session {}: {}", session_id, e);
+                                                } else {
+                                                    info!("✅ Successfully forwarded ASR to session {}", session_id);
+                                                }
+                                            } else {
+                                                warn!("⚠️ No ASR callback available");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "HelloChunk" | "AudioChunk" => {
+                                // 音频块事件：提取音频数据
+                                if let Value::Array(arr) = val {
+                                    if let Some(Value::Binary(audio_data)) = arr.first() {
+                                        info!("👋 Received {} from EchoKit: {} bytes", event_type, audio_data.len());
+
+                                        // 转发音频数据到所有活跃会话
+                                        let sessions = active_sessions.read().await;
+                                        for (session_id, _) in sessions.iter() {
+                                            if let Some(callback) = audio_callback {
+                                                info!("� Forwarding {} to session: {}", event_type, session_id);
+                                                if let Err(e) = callback.send((session_id.clone(), audio_data.clone())) {
+                                                    error!("❌ Failed to send {} to session {}: {}", event_type, session_id, e);
+                                                } else {
+                                                    debug!("✅ Successfully forwarded {} to session {}", event_type, session_id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "StartAudio" => {
+                                info!("🔊 Start audio event");
+
+                                // 转发 StartAudio 事件
+                                let event_json = serde_json::json!({
+                                    "event": "StartAudio"
+                                }).to_string();
+                                let event_bytes = event_json.as_bytes().to_vec();
+
+                                let sessions = active_sessions.read().await;
+                                for (session_id, _) in sessions.iter() {
+                                    if let Some(callback) = audio_callback {
+                                        let _ = callback.send((session_id.clone(), event_bytes.clone()));
+                                    }
+                                }
+                            }
+                            _ => {
+                                debug!("📦 Unhandled MessagePack event: {}", event_type);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                debug!("📦 Unexpected MessagePack value type: {:?}", value);
+            }
+        }
+
+        Ok(())
+    }
+
     // 处理二进制音频数据
     async fn handle_binary_audio_data(
         data: Vec<u8>,

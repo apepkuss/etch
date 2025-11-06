@@ -114,11 +114,15 @@ async fn main() -> Result<()> {
     // 创建 ASR 回调通道（用于 EchoKit -> Adapter -> Device 的 ASR 结果路由）
     let (asr_callback_tx, asr_callback_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // 创建 EchoKit 连接管理器（带音频和 ASR 回调）
-    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_callbacks(
+    // 创建原始消息回调通道（用于直接转发 MessagePack 数据）
+    let (raw_message_tx, raw_message_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // 创建 EchoKit 连接管理器（带音频、ASR 和原始消息回调）
+    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_all_callbacks(
         config.echokit_websocket_url.clone(),
         audio_callback_tx,
         asr_callback_tx,
+        raw_message_tx,
     ));
 
     // 创建音频处理器
@@ -141,12 +145,13 @@ async fn main() -> Result<()> {
     let connection_manager = Arc::new(websocket::connection_manager::DeviceConnectionManager::new());
     let session_manager = Arc::new(websocket::session_manager::SessionManager::new());
 
-    // 创建 EchoKit 适配器（带音频和 ASR 接收器）
+    // 创建 EchoKit 适配器（带音频、ASR 和原始消息接收器）
     let echokit_adapter = Arc::new(echokit::EchoKitSessionAdapter::new(
         echokit_manager.get_client(),
         connection_manager.clone(),
         audio_callback_rx,
         asr_callback_rx,
+        raw_message_rx,
     ));
 
     // 启动 EchoKit 音频接收器
@@ -159,6 +164,12 @@ async fn main() -> Result<()> {
     let echokit_adapter_clone = echokit_adapter.clone();
     tokio::spawn(async move {
         echokit_adapter_clone.start_asr_receiver().await;
+    });
+
+    // 启动 EchoKit 原始消息接收器
+    let echokit_adapter_clone = echokit_adapter.clone();
+    tokio::spawn(async move {
+        echokit_adapter_clone.start_raw_message_receiver().await;
     });
 
     // 创建心跳监控
