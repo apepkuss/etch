@@ -36,7 +36,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             udp_bind_address: "0.0.0.0:8083".to_string(),
-            echokit_websocket_url: "ws://echokit-server:9988/v1/realtime".to_string(),
+            echokit_websocket_url: "wss://indie.echokit.dev/ws/ci-test-visitor".to_string(),
             api_gateway_websocket_url: "ws://api-gateway:8080/ws".to_string(),
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟
@@ -396,7 +396,13 @@ impl BridgeService {
 
             info!("Health check service listening on: {}", bind_address);
 
-            let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
+            let listener = match tokio::net::TcpListener::bind(&bind_address).await {
+                Ok(l) => l,
+                Err(e) => {
+                    warn!("Failed to bind health check service on {}: {}. Skipping health check service.", bind_address, e);
+                    return;
+                }
+            };
             if let Err(e) = axum::serve(listener, app).await {
                 error!("Health check service error: {}", e);
             }
@@ -409,6 +415,7 @@ impl BridgeService {
                 routing::get,
                 Router,
             };
+            use tower_http::services::ServeDir;
 
             let ws_state = websocket::audio_handler::AppState {
                 connection_manager,
@@ -417,13 +424,15 @@ impl BridgeService {
             };
 
             let app = Router::new()
-                // 支持旧的固定路径（向后兼容）
+                // WebSocket 路由
                 .route("/ws/audio", get(websocket::audio_handler::websocket_handler))
-                // 支持新的动态路径 /ws/:id?record=true
-                .route("/ws/:id", get(websocket::audio_handler::websocket_handler_with_id))
-                .with_state(ws_state);
+                .route("/ws/{id}", get(websocket::audio_handler::websocket_handler_with_id))
+                .with_state(ws_state)
+                // 静态文件服务：提供 resources/ 目录下的文件
+                .fallback_service(ServeDir::new("resources"));
 
             info!("WebSocket server listening on: {}", ws_bind_address);
+            info!("Static files served from: resources/");
 
             let listener = tokio::net::TcpListener::bind(&ws_bind_address).await.unwrap();
             if let Err(e) = axum::serve(listener, app).await {

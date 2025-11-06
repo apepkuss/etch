@@ -365,11 +365,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_adapter_creation() {
-        let echokit_client = Arc::new(EchoKitClient::new("ws://localhost:9988".to_string()));
+        let echokit_client = Arc::new(EchoKitClient::new("wss://indie.echokit.dev/ws/test-visitor".to_string()));
         let conn_mgr = Arc::new(DeviceConnectionManager::new());
         let (_tx, rx) = mpsc::unbounded_channel();
+        let (_asr_tx, asr_rx) = mpsc::unbounded_channel();
 
-        let adapter = EchoKitSessionAdapter::new(echokit_client, conn_mgr, rx);
+        let adapter = EchoKitSessionAdapter::new(echokit_client, conn_mgr, rx, asr_rx);
         assert_eq!(adapter.get_active_sessions_count().await, 0);
     }
 }

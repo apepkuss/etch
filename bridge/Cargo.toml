@@ -23,7 +23,7 @@ url = "2.5"
 # HTTP server
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "fs"] }
 
 # MQTT
 rumqttc = "0.24"
