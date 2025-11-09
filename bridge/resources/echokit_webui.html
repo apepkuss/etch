@@ -49,7 +49,7 @@
 
             <!-- WebSocket 连接区域 -->
             <div class="flex gap-2 mb-6">
-                <input type="text" id="wsUrl" placeholder="WebSocket 地址 (例如, ws://localhost:10031/ws/)"
+                <input type="text" id="wsUrl" placeholder="WebSocket 地址 (例如, ws://localhost:8080/ws/)"
                     value="ws://localhost:10031/ws/" class="input input-bordered flex-1" />
                 <button id="connectBtn" class="btn btn-primary">连接</button>
             </div>
@@ -278,7 +278,8 @@
                         this.connectBtn.classList.add('btn-error');
                         this.addServerMessage('WebSocket 连接成功');
 
-                        // 连接成功后立即发送 StartChat 命令，触发 EchoKit Server 发送 Hello 消息
+                        // 🔧 Bridge 适配：连接成功后立即发送 StartChat 命令
+                        // EchoKit Server 会在连接时自动发送 Hello，但 Bridge 需要客户端触发
                         const startChatCmd = { event: 'StartChat' };
                         this.websocket.send(JSON.stringify(startChatCmd));
                         this.addServerMessage('📤 已发送 StartChat 命令');
@@ -495,29 +496,33 @@
                 if (!this.myvad) return;
 
                 if (this.isVadActive) {
-                    // 停止 VAD 监听
                     this.myvad.pause();
                     this.isVadActive = false;
                     this.addServerMessage('⏹️ VAD 已停止');
 
-                    // 停止监听时断开 WebSocket（模仿 EchoKit WebUI 行为）
+                    // 关闭 VAD 监听时同时断开服务器连接
                     if (this.isConnected) {
                         this.disconnectWebSocket();
-                        this.addServerMessage('� 已断开服务器连接');
+                        this.addServerMessage('🔌 已断开服务器连接');
                     }
                 } else {
                     try {
-                        // 开始监听时自动连接 WebSocket（模仿 EchoKit WebUI 行为）
-                        if (!this.isConnected) {
-                            this.addServerMessage('🔄 自动连接服务器...');
-                            this.connectWebSocket(this.recordingMode);
+                        // 如果是录制模式，重新连接服务器并添加 record=true 参数
+                        if (this.recordingMode) {
+                            if (this.isConnected) {
+                                this.addServerMessage('🔄 录制模式：重新连接服务器...');
+                                this.disconnectWebSocket();
+                                // 等待断开完成
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                            }
+                            this.connectWebSocket(true); // 添加 record=true 参数
                             // 等待连接建立
                             await new Promise(resolve => setTimeout(resolve, 1000));
-
-                            if (!this.isConnected) {
-                                this.addServerMessage('❌ 连接失败，请检查服务器状态');
-                                return;
-                            }
+                        } else {
+                            // 对话模式下确保连接已建立
+                            this.connectWebSocket(false);
+                            // 等待连接建立
+                            await new Promise(resolve => setTimeout(resolve, 1000));
                         }
 
                         await this.myvad.start();
@@ -541,21 +546,23 @@
                         int16Array[i] = Math.max(-32768, Math.min(32767, audioData[i] * 32767));
                     }
 
-                    // 不再每次发送音频前发送 StartChat，因为：
-                    // 1. 连接时已经发送了 StartChat 创建会话
-                    // 2. 重复发送会创建新会话，破坏多轮对话
+                    if (this.recordingMode) {
+                        this.websocket.send(JSON.stringify({ event: 'StartRecord' }));
+                    } else {
+                        this.websocket.send(JSON.stringify({ event: 'StartChat' }));
+                    }
 
-                    // 直接发送音频数据
                     this.websocket.send(int16Array.buffer);
                     console.log('发送 VAD 音频数据到服务器，长度:', int16Array.length);
 
-                    // 发送 Submit 标识结束音频流
+                    // 根据录制模式发送不同的结束标识
+                    const endMarker = this.recordingMode ? "Recording" : "Normal";
                     this.websocket.send(JSON.stringify({ event: 'Submit' }));
-                    console.log('发送 Submit 命令');
+                    console.log('发送结束标识:', endMarker);
 
-                    // 在调试模式下显示
+                    // 在调试模式下显示发送的结束标识
                     if (this.debugMode) {
-                        this.addServerMessage(`📤 已发送音频和 Submit 命令`);
+                        this.addServerMessage(`📤 发送结束标识: ${endMarker}`);
                     }
                 }
             }

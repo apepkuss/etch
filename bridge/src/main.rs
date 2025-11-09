@@ -125,6 +125,16 @@ async fn main() -> Result<()> {
         raw_message_tx,
     ));
 
+    // 🚀 优化：预先连接到 EchoKit Server，避免首次会话创建时的连接延迟
+    info!("🔌 Pre-connecting to EchoKit Server...");
+    if let Err(e) = echokit_manager.get_client().connect().await {
+        warn!("⚠️ Failed to pre-connect to EchoKit Server: {}. Will retry on first session.", e);
+        // 不中断启动，首次会话创建时会自动连接
+    } else {
+        info!("✅ Pre-connected to EchoKit Server successfully");
+        info!("🎁 Hello messages cached and ready for instant delivery");
+    }
+
     // 创建音频处理器
     let audio_processor = Arc::new(audio_processor::AudioProcessor::new(
         echokit_manager.get_client(),

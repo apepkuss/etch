@@ -271,7 +271,8 @@ impl EchoKitClient {
 
                     // 添加小延迟，确保每条消息作为独立的 WebSocket 帧发送
                     // 避免多条消息在网络层被合并
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    // 优化：从 10ms 减少到 3ms，减少总延迟
+                    tokio::time::sleep(tokio::time::Duration::from_millis(3)).await;
                 }
             } else {
                 warn!("⚠️ No raw message callback available for sending cached Hello messages");
@@ -908,11 +909,10 @@ impl EchoKitClient {
                         cached_hello_messages.write().await.clear();
 
                         info!("🎯 Forwarding event to clients: {}", event_str);
-                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
-                        let event_json = serde_json::json!({
-                            "event": event_str
-                        }).to_string();
-                        let event_bytes = event_json.as_bytes().to_vec();
+                        // ✅ 使用 MessagePack 编码（保持与 EchoKit 原始格式一致）
+                        // 直接编码字符串 "HelloStart"，与 EchoKit Server 发送的格式相同
+                        let event_bytes = rmp_serde::to_vec(&event_str)
+                            .expect("Failed to serialize HelloStart to MessagePack");
 
                         // 缓存 HelloStart
                         cached_hello_messages.write().await.push(event_bytes.clone());
@@ -932,19 +932,18 @@ impl EchoKitClient {
                     }
                     "HelloEnd" => {
                         info!("🎯 Received HelloEnd - finalizing cached Hello messages");
-                        info!("🎯 Forwarding event to clients: {}", event_str);
-                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
-                        let event_json = serde_json::json!({
-                            "event": event_str
-                        }).to_string();
-                        let event_bytes = event_json.as_bytes().to_vec();
 
-                        // 缓存 HelloEnd
-                        cached_hello_messages.write().await.push(event_bytes.clone());
+                        // ⚠️ 不缓存 HelloEnd，因为它会被实时流转发
+                        // 缓存 HelloEnd 会导致重复发送（缓存 + 实时流）
                         let cache_size = cached_hello_messages.read().await.len();
-                        info!("✅ Cached Hello sequence complete: {} messages", cache_size);
+                        info!("✅ Cached Hello sequence complete: {} messages (excluding HelloEnd)", cache_size);
 
-                        // 转发到所有活跃会话
+                        info!("🎯 Forwarding event to clients: {}", event_str);
+                        // ✅ 使用 MessagePack 编码（保持与 EchoKit 原始格式一致）
+                        let event_bytes = rmp_serde::to_vec(&event_str)
+                            .expect("Failed to serialize HelloEnd to MessagePack");
+
+                        // 转发到所有活跃会话（仅实时流转发，不缓存）
                         let sessions = active_sessions.read().await;
                         for (session_id, _) in sessions.iter() {
                             if let Some(callback) = audio_callback {
@@ -960,11 +959,9 @@ impl EchoKitClient {
                     "EndAudio" | "EndResponse" => {
                         info!("🎯 Forwarding event to clients: {}", event_str);
 
-                        // 将事件名编码为 JSON 格式发送（客户端期望的格式）
-                        let event_json = serde_json::json!({
-                            "event": event_str
-                        }).to_string();
-                        let event_bytes = event_json.as_bytes().to_vec();
+                        // ✅ 使用 MessagePack 编码（保持与 EchoKit 原始格式一致）
+                        let event_bytes = rmp_serde::to_vec(&event_str)
+                            .expect(&format!("Failed to serialize {} to MessagePack", event_str));
 
                         // 转发到所有活跃会话
                         let sessions = active_sessions.read().await;
