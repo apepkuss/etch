@@ -28,6 +28,7 @@ pub struct EchoKitClient {
     raw_message_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, raw_messagepack_data)
     cached_hello_messages: Arc<RwLock<Vec<Vec<u8>>>>, // 缓存 HelloChunk 消息，用于新会话
     pending_hello_sessions: Arc<RwLock<Vec<String>>>, // 等待发送缓存 Hello 的会话列表
+    hello_caching_enabled: Arc<RwLock<bool>>, // 控制是否继续缓存 Hello 消息（HelloEnd 后停止）
 }
 
 impl EchoKitClient {
@@ -47,6 +48,7 @@ impl EchoKitClient {
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
+            hello_caching_enabled: Arc::new(RwLock::new(true)), // 初始启用缓存
         }
     }
 
@@ -70,6 +72,7 @@ impl EchoKitClient {
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
+            hello_caching_enabled: Arc::new(RwLock::new(true)), // 初始启用缓存
         }
     }
 
@@ -94,6 +97,7 @@ impl EchoKitClient {
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
+            hello_caching_enabled: Arc::new(RwLock::new(true)), // 初始启用缓存
         }
     }
 
@@ -119,6 +123,7 @@ impl EchoKitClient {
             raw_message_callback: Some(raw_message_callback),
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
+            hello_caching_enabled: Arc::new(RwLock::new(true)), // 初始启用缓存
         }
     }
 
@@ -463,6 +468,7 @@ impl EchoKitClient {
         let raw_message_callback = self.raw_message_callback.clone();
         let cached_hello_messages = self.cached_hello_messages.clone();
         let pending_hello_sessions = self.pending_hello_sessions.clone();
+        let hello_caching_enabled = self.hello_caching_enabled.clone();
 
         // 为每个连接创建独立的消息通道
         let (tx, mut rx) = mpsc::unbounded_channel::<EchoKitClientMessage>();
@@ -487,6 +493,7 @@ impl EchoKitClient {
                                     &service_status,
                                     &active_sessions,
                                     &asr_callback,
+                                    &hello_caching_enabled,
                                 ).await {
                                     error!("Error handling server message: {}", e);
                                 }
@@ -501,11 +508,13 @@ impl EchoKitClient {
 
                                         // 🎁 检查是否是 Hello 相关消息，如果是则缓存
                                         let should_cache = Self::should_cache_hello_message(&msgpack_value);
-                                        if should_cache {
+                                        if should_cache && *hello_caching_enabled.read().await {
                                             info!("🎁 Caching Hello-related message ({} bytes)", data.len());
                                             cached_hello_messages.write().await.push(data.clone());
                                             let cache_size = cached_hello_messages.read().await.len();
                                             info!("📦 Cached messages count: {}", cache_size);
+                                        } else if should_cache {
+                                            info!("⏹️ Skipping Hello message caching (disabled after HelloEnd)");
                                         }
 
                                         // 对于所有MessagePack消息，直接转发原始数据给所有活跃会话
@@ -513,40 +522,7 @@ impl EchoKitClient {
                                         let sessions = active_sessions.read().await;
                                         info!("📊 Active sessions count: {}", sessions.len());
                                         for (session_id, _) in sessions.iter() {
-                                            // 🎁 首次发送时检查并发送缓存的 Hello
-                                            // 使用 pending_hello_sessions 来确保只发送一次
-                                            {
-                                                let pending = pending_hello_sessions.read().await;
-                                                if pending.contains(session_id) {
-                                                    drop(pending); // 释放读锁
-                                                    info!("🎁 Detected first message for session {}, sending cached Hello first", session_id);
-
-                                                    // 发送缓存的 Hello
-                                                    let mut pending_write = pending_hello_sessions.write().await;
-                                                    if let Some(pos) = pending_write.iter().position(|s| s == session_id) {
-                                                        pending_write.remove(pos);
-                                                        drop(pending_write); // 释放写锁
-
-                                                        let cached_messages = cached_hello_messages.read().await;
-                                                        if !cached_messages.is_empty() {
-                                                            info!("🎁 Sending {} cached Hello messages to session {}", cached_messages.len(), session_id);
-
-                                                            if let Some(callback) = &raw_message_callback {
-                                                                for (i, data) in cached_messages.iter().enumerate() {
-                                                                    info!("📤 Forwarding cached Hello message {} ({} bytes)", i + 1, data.len());
-                                                                    if let Err(e) = callback.send((session_id.clone(), data.clone())) {
-                                                                        error!("❌ Failed to send cached Hello message: {}", e);
-                                                                    }
-                                                                }
-                                                            } else {
-                                                                warn!("⚠️ No raw message callback available for sending cached Hello");
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // 然后发送当前消息
+                                            // 直接发送当前消息（Hello 消息已在 register_bridge_session 时发送）
                                             if let Some(callback) = &audio_callback {
                                                 info!("📤 Forwarding MessagePack data to session: {}", session_id);
                                                 if let Err(e) = callback.send((session_id.clone(), data.clone())) {
@@ -566,6 +542,7 @@ impl EchoKitClient {
                                             &audio_callback,
                                             &asr_callback,
                                             &cached_hello_messages,
+                                            &hello_caching_enabled,
                                         ).await {
                                             warn!("Error handling MessagePack data: {}", e);
                                         }
@@ -649,6 +626,7 @@ impl EchoKitClient {
         service_status: &Arc<RwLock<Option<EchoKitServiceStatus>>>,
         active_sessions: &Arc<RwLock<HashMap<String, String>>>,
         asr_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
+        hello_caching_enabled: &Arc<RwLock<bool>>,
     ) -> Result<()> {
         let server_message: EchoKitServerMessage = serde_json::from_str(&text)
             .with_context(|| format!("Failed to parse server message: {}", text))?;
@@ -891,6 +869,7 @@ impl EchoKitClient {
         audio_callback: &Option<mpsc::UnboundedSender<(String, Vec<u8>)>>,
         asr_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
         cached_hello_messages: &Arc<RwLock<Vec<Vec<u8>>>>,
+        hello_caching_enabled: &Arc<RwLock<bool>>,
     ) -> Result<()> {
         use rmpv::Value;
 
@@ -907,6 +886,9 @@ impl EchoKitClient {
                         info!("🎯 Received HelloStart - clearing cached Hello messages");
                         // 清空之前的缓存，准备缓存新的 Hello 序列
                         cached_hello_messages.write().await.clear();
+
+                        // 🔓 启用缓存（新的问候序列开始）
+                        *hello_caching_enabled.write().await = true;
 
                         info!("🎯 Forwarding event to clients: {}", event_str);
                         // ✅ 使用 MessagePack 编码（保持与 EchoKit 原始格式一致）
@@ -933,17 +915,27 @@ impl EchoKitClient {
                     "HelloEnd" => {
                         info!("🎯 Received HelloEnd - finalizing cached Hello messages");
 
-                        // ⚠️ 不缓存 HelloEnd，因为它会被实时流转发
-                        // 缓存 HelloEnd 会导致重复发送（缓存 + 实时流）
-                        let cache_size = cached_hello_messages.read().await.len();
-                        info!("✅ Cached Hello sequence complete: {} messages (excluding HelloEnd)", cache_size);
+                        // ✅ HelloEnd 已经在前面的通用缓存逻辑中被缓存了（line 507），这里不需要重复缓存
+                        // 只需要记录日志和转发给活跃会话即可
 
-                        info!("🎯 Forwarding event to clients: {}", event_str);
                         // ✅ 使用 MessagePack 编码（保持与 EchoKit 原始格式一致）
                         let event_bytes = rmp_serde::to_vec(&event_str)
                             .expect("Failed to serialize HelloEnd to MessagePack");
 
-                        // 转发到所有活跃会话（仅实时流转发，不缓存）
+                        let cached_messages = cached_hello_messages.read().await;
+                        let cache_size = cached_messages.len();
+                        let total_bytes: usize = cached_messages.iter().map(|msg| msg.len()).sum();
+                        let estimated_seconds = total_bytes as f64 / (16000.0 * 2.0); // 16kHz, 16-bit
+                        info!("🎁 Greeting cached: {} chunks (including HelloEnd), ~{:.1} seconds audio, {} bytes total, ready for instant delivery",
+                            cache_size, estimated_seconds, total_bytes);
+
+                        // 🔒 禁用缓存（问候序列已结束，不再缓存后续的 Hello 消息）
+                        *hello_caching_enabled.write().await = false;
+                        info!("⏹️ Hello message caching disabled after HelloEnd");
+
+                        info!("🎯 Forwarding event to clients: {}", event_str);
+
+                        // 转发到所有活跃会话
                         let sessions = active_sessions.read().await;
                         for (session_id, _) in sessions.iter() {
                             if let Some(callback) = audio_callback {

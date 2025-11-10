@@ -36,7 +36,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             udp_bind_address: "0.0.0.0:8083".to_string(),
-            echokit_websocket_url: "wss://indie.echokit.dev/ws/ci-test-visitor".to_string(),
+            echokit_websocket_url: "wss://indie.echokit.dev/ws/bridge-test".to_string(),
             api_gateway_websocket_url: "ws://api-gateway:8080/ws".to_string(),
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟

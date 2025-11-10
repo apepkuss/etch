@@ -51,6 +51,8 @@ impl EchoKitSessionAdapter {
         device_id: String,
         config: EchoKitConfig,
     ) -> Result<String> {
+        let start_time = std::time::Instant::now();
+
         // 生成 EchoKit 会话 ID
         let echokit_session_id = format!("ek_{}", uuid::Uuid::new_v4());
 
@@ -65,11 +67,18 @@ impl EchoKitSessionAdapter {
             .pre_register_session(echokit_session_id.clone(), device_id.clone())
             .await;
 
+        let pre_register_elapsed = start_time.elapsed();
+        info!("⏱️ Pre-registration took: {:.3}s", pre_register_elapsed.as_secs_f64());
+
         // 调用 EchoKit 客户端启动会话
+        let session_start_time = std::time::Instant::now();
         self.echokit_client
             .start_session(echokit_session_id.clone(), device_id.clone(), config)
             .await
             .with_context(|| "Failed to start EchoKit session")?;
+
+        let session_start_elapsed = session_start_time.elapsed();
+        info!("⏱️ start_session took: {:.3}s", session_start_elapsed.as_secs_f64());
 
         // 保存映射关系
         let mut mapping = self.session_mapping.write().await;
@@ -78,8 +87,60 @@ impl EchoKitSessionAdapter {
             (device_id.clone(), echokit_session_id.clone()),
         );
 
-        info!("EchoKit session created successfully: {}", echokit_session_id);
+        let total_elapsed = start_time.elapsed();
+        info!(
+            "⏱️ EchoKit session created successfully: {} (total time: {:.3}s)",
+            echokit_session_id,
+            total_elapsed.as_secs_f64()
+        );
+
+        if total_elapsed.as_secs() > 5 {
+            warn!(
+                "⚠️ EchoKit Session creation took unusually long: {:.3}s (expected < 5s)",
+                total_elapsed.as_secs_f64()
+            );
+        }
+
         Ok(echokit_session_id)
+    }
+
+    /// 注册 Bridge 会话到现有的 EchoKit 会话（复用 EchoKit 会话）
+    pub async fn register_bridge_session(
+        &self,
+        bridge_session_id: String,
+        device_id: String,
+        echokit_session_id: String,
+    ) -> Result<()> {
+        info!(
+            "Registering bridge session {} to existing EchoKit session {} for device {}",
+            bridge_session_id, echokit_session_id, device_id
+        );
+
+        // 保存映射关系
+        let mut mapping = self.session_mapping.write().await;
+        mapping.insert(
+            bridge_session_id.clone(),
+            (device_id.clone(), echokit_session_id.clone()),
+        );
+        drop(mapping);
+
+        // 🔑 重新注册 EchoKit Session ID 到 active_sessions
+        // 确保 ASR 等消息可以正确转发
+        self.echokit_client
+            .pre_register_session(echokit_session_id.clone(), device_id.clone())
+            .await;
+
+        // 🎁 修复：复用会话时也要发送缓存的 Hello 消息给新客户端
+        // 虽然 EchoKit 会话被复用，但对于新的 Bridge 客户端来说，
+        // 这是首次连接，用户期望看到问候语
+        info!("🎁 Triggering cached Hello messages for reused session {}", echokit_session_id);
+        self.echokit_client.check_and_send_cached_hello(&echokit_session_id).await;
+
+        info!(
+            "✅ Bridge session {} registered successfully to EchoKit session {}",
+            bridge_session_id, echokit_session_id
+        );
+        Ok(())
     }
 
     /// 转发音频到 EchoKit
@@ -184,6 +245,25 @@ impl EchoKitSessionAdapter {
                 "Received audio from EchoKit session {}: {} bytes",
                 echokit_session_id,
                 audio_data.len()
+            );
+
+            // ✅ 过滤无效音频数据：太小的音频块通常是噪音或无效数据
+            const MIN_AUDIO_SIZE: usize = 100; // 最小有效音频大小（字节）
+            if audio_data.len() < MIN_AUDIO_SIZE {
+                warn!(
+                    "⚠️ Filtered out small audio chunk from EchoKit session {}: {} bytes (< {} bytes threshold)",
+                    echokit_session_id,
+                    audio_data.len(),
+                    MIN_AUDIO_SIZE
+                );
+                continue; // 跳过此音频块
+            }
+
+            info!(
+                "✅ Valid audio from EchoKit session {}: {} bytes (passed {} bytes threshold)",
+                echokit_session_id,
+                audio_data.len(),
+                MIN_AUDIO_SIZE
             );
 
             // 根据 echokit_session_id 找到对应的 bridge_session_id 和 device_id

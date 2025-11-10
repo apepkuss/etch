@@ -82,6 +82,9 @@ async fn handle_device_websocket(
     // 2. 当前活跃会话 ID
     let mut active_session: Option<String> = None;
 
+    // 🔧 用于跟踪设备级别的 EchoKit 会话（避免重复创建）
+    let mut device_echokit_session: Option<String> = None;
+
     // 3. 处理设备消息
     while let Some(msg_result) = receiver.next().await {
         match msg_result {
@@ -92,6 +95,7 @@ async fn handle_device_websocket(
                     &device_id,
                     record_mode,
                     &mut active_session,
+                    &mut device_echokit_session,
                     &state,
                 ).await {
                     error!("Failed to handle control message: {}", e);
@@ -101,6 +105,15 @@ async fn handle_device_websocket(
             Ok(Message::Binary(audio_data)) => {
                 // 处理音频数据
                 if let Some(session_id) = &active_session {
+                    // ✅ 检查设备是否仍然连接
+                    if !state.connection_manager.is_device_online(&device_id).await {
+                        warn!(
+                            "⚠️ Ignoring audio from disconnected device {} (session: {})",
+                            device_id, session_id
+                        );
+                        break;
+                    }
+
                     info!(
                         "📊 Received audio data: {} bytes for session {}",
                         audio_data.len(),
@@ -172,11 +185,12 @@ async fn handle_control_message(
     device_id: &str,
     record_mode: bool,
     active_session: &mut Option<String>,
+    device_echokit_session: &mut Option<String>,
     state: &AppState,
 ) -> anyhow::Result<()> {
     // 优先尝试解析为 ClientCommand（Web 客户端协议）
     if let Ok(cmd) = super::protocol::ClientCommand::from_json(text) {
-        return handle_client_command(cmd, device_id, record_mode, active_session, state).await;
+        return handle_client_command(cmd, device_id, record_mode, active_session, device_echokit_session, state).await;
     }
 
     // 回退到旧的 DeviceEvent 格式（保持向后兼容）
@@ -302,6 +316,7 @@ async fn handle_client_command(
     device_id: &str,
     record_mode: bool,
     active_session: &mut Option<String>,
+    device_echokit_session: &mut Option<String>,
     state: &AppState,
 ) -> anyhow::Result<()> {
     use super::protocol::ClientCommand;
@@ -356,28 +371,54 @@ async fn handle_client_command(
             // 只有对话模式才创建 EchoKit 会话
             if !is_record {
                 let echokit_config = echo_shared::EchoKitConfig::default();
-                match state.echokit_adapter
-                    .create_echokit_session(
-                        session_id.clone(),
-                        device_id.to_string(),
-                        echokit_config,
-                    )
-                    .await
-                {
-                    Err(e) => {
-                        error!("Failed to create EchoKit session: {}", e);
-                    }
-                    Ok(echokit_session_id) => {
-                        // EchoKit 会话创建成功
-                        info!("EchoKit session {} created for bridge session {}, waiting for StartChat command",
-                              echokit_session_id, session_id);
 
-                        // 转发 StartChat 命令给 EchoKit
-                        if matches!(cmd, ClientCommand::StartChat) {
-                            if let Err(e) = state.echokit_adapter.send_start_chat(&echokit_session_id).await {
-                                error!("Failed to send StartChat command to EchoKit: {}", e);
-                            } else {
-                                info!("📤 StartChat command forwarded to EchoKit for session {}", echokit_session_id);
+                // 🔧 检查是否已有设备级别的 EchoKit 会话
+                if let Some(existing_ek_session) = &device_echokit_session {
+                    // 复用现有的 EchoKit 会话
+                    info!(
+                        "♻️ Reusing existing EchoKit session {} for bridge session {}",
+                        existing_ek_session, session_id
+                    );
+
+                    // 将新的 bridge session 绑定到现有的 EchoKit 会话
+                    state.echokit_adapter
+                        .register_bridge_session(
+                            session_id.clone(),
+                            device_id.to_string(),
+                            existing_ek_session.clone(),
+                        )
+                        .await?;
+
+                    info!("✅ Bridge session {} bound to existing EchoKit session {}",
+                          session_id, existing_ek_session);
+                } else {
+                    // 首次创建 EchoKit 会话
+                    match state.echokit_adapter
+                        .create_echokit_session(
+                            session_id.clone(),
+                            device_id.to_string(),
+                            echokit_config,
+                        )
+                        .await
+                    {
+                        Err(e) => {
+                            error!("Failed to create EchoKit session: {}", e);
+                        }
+                        Ok(echokit_session_id) => {
+                            // EchoKit 会话创建成功
+                            info!("🆕 EchoKit session {} created for bridge session {}",
+                                  echokit_session_id, session_id);
+
+                            // 保存设备级别的 EchoKit 会话 ID
+                            *device_echokit_session = Some(echokit_session_id.clone());
+
+                            // 转发 StartChat 命令给 EchoKit
+                            if matches!(cmd, ClientCommand::StartChat) {
+                                if let Err(e) = state.echokit_adapter.send_start_chat(&echokit_session_id).await {
+                                    error!("Failed to send StartChat command to EchoKit: {}", e);
+                                } else {
+                                    info!("📤 StartChat command forwarded to EchoKit for session {}", echokit_session_id);
+                                }
                             }
                         }
                     }
