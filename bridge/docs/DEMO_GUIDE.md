@@ -2,7 +2,7 @@
 
 ## 🎯 概述
 
-本指南详细说明如何使用 Bridge 内置测试前端（`index_zh_test.html`）演示完整的语音交互功能，包括对话模式和录制模式。
+本指南详细说明如何使用 Bridge 内置测试前端（`bridge_webui.html`）演示完整的语音交互功能，包括对话模式和录制模式。
 
 ---
 
@@ -112,7 +112,7 @@ cargo build --release
 cargo run --release
 
 # 4. 打开浏览器
-open http://localhost:10031/index_zh_test.html
+open http://localhost:10031/bridge_webui.html
 ```
 
 **预期输出：**
@@ -633,7 +633,7 @@ cd /Volumes/Dev/secondstate/me/etch/bridge
 # ✅ 关键日志：WebSocket server listening on: 0.0.0.0:10031
 
 # === 浏览器操作 ===
-# 1. 浏览器自动打开 http://localhost:10031/index_zh_test.html
+# 1. 浏览器自动打开 http://localhost:10031/bridge_webui.html
 # 2. 按 F12 打开开发者工具
 # 3. 切换到 Console 标签
 # 4. 查看 Visitor ID 输出

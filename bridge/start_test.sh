@@ -38,14 +38,14 @@ if [ ! -f "Cargo.toml" ]; then
 fi
 
 # 检查测试文件是否存在
-if [ ! -f "resources/index_zh_test.html" ]; then
-    echo "❌ 错误：找不到 resources/index_zh_test.html"
-    echo "请先运行：cp ../echokit_server/resources/index_zh.html ./resources/index_zh_test.html"
+if [ ! -f "resources/bridge_webui.html" ]; then
+    echo "❌ 错误：找不到 resources/bridge_webui.html"
+    echo "请确认测试文件存在"
     exit 1
 fi
 
 echo "📋 测试准备清单:"
-echo "  ✅ 测试文件: resources/index_zh_test.html"
+echo "  ✅ 测试文件: resources/bridge_webui.html"
 echo "  ✅ Bridge 代码: src/"
 echo ""
 
@@ -120,7 +120,7 @@ echo ""
 echo "🎬 启动测试环境..."
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📍 测试 URL: http://localhost:10031/index_zh_test.html"
+echo "📍 测试 URL: http://localhost:10031/bridge_webui.html"
 echo "📍 Bridge WebSocket: ws://localhost:10031/ws/"
 echo "📍 EchoKit Server: $ECHOKIT_WEBSOCKET_URL"
 echo "📍 静态文件服务: Bridge 内置"
@@ -172,7 +172,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "✨ 测试环境已就绪！"
 echo ""
 echo "📖 测试步骤："
-echo "   1. 打开浏览器访问: http://localhost:10031/index_zh_test.html"
+echo "   1. 打开浏览器访问: http://localhost:10031/bridge_webui.html"
 echo "   2. 点击\"连接\"按钮"
 echo "   3. 开始测试（参考 TESTING_GUIDE.md）"
 echo ""
@@ -192,7 +192,7 @@ open_browser=${open_browser:-y}
 if [ "$open_browser" = "y" ] || [ "$open_browser" = "Y" ]; then
     echo "🚀 正在打开浏览器..."
 
-    TEST_URL="http://localhost:10031/index_zh_test.html"
+    TEST_URL="http://localhost:10031/bridge_webui.html"
 
     if command -v open &> /dev/null; then
         open "$TEST_URL"
