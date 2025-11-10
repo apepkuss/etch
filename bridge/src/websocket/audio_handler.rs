@@ -89,6 +89,9 @@ async fn handle_device_websocket(
     while let Some(msg_result) = receiver.next().await {
         match msg_result {
             Ok(Message::Text(text)) => {
+                // 更新心跳（任何客户端消息都表示连接活跃）
+                state.connection_manager.update_heartbeat(&device_id).await;
+
                 // 处理控制消息
                 if let Err(e) = handle_control_message(
                     &text,
@@ -103,6 +106,9 @@ async fn handle_device_websocket(
             }
 
             Ok(Message::Binary(audio_data)) => {
+                // 更新心跳（音频数据也表示连接活跃）
+                state.connection_manager.update_heartbeat(&device_id).await;
+
                 // 处理音频数据
                 if let Some(session_id) = &active_session {
                     // ✅ 检查设备是否仍然连接
@@ -147,7 +153,8 @@ async fn handle_device_websocket(
             }
 
             Ok(Message::Ping(data)) => {
-                // 响应 Ping
+                // 响应 Ping 并更新心跳
+                state.connection_manager.update_heartbeat(&device_id).await;
                 if let Err(e) = state.connection_manager
                     .send_pong(&device_id, data.to_vec()) // Convert Bytes to Vec<u8>
                     .await
@@ -298,6 +305,24 @@ async fn forward_audio_to_echokit(
 ) -> anyhow::Result<()> {
     let data_len = audio_data.len();
 
+    // 🔑 关键修复：在转发音频前，确保本轮对话已发送 StartChat
+    // 检查当前session是否需要发送StartChat（每轮对话的第一个音频包）
+    let needs_start_chat = state.session_manager.needs_start_chat_for_round(session_id).await;
+
+    if needs_start_chat {
+        info!("🎬 Detected new conversation round for session {}, sending StartChat", session_id);
+
+        // 发送 StartChat 命令到 EchoKit Server
+        if let Err(e) = state.echokit_adapter.send_start_chat_for_session(session_id).await {
+            error!("Failed to send StartChat for session {}: {}", session_id, e);
+            return Err(e.into());
+        }
+
+        // 标记本轮已发送 StartChat
+        state.session_manager.mark_start_chat_sent(session_id).await;
+        info!("✅ StartChat sent for new conversation round (session: {})", session_id);
+    }
+
     // 使用 EchoKit 适配器转发音频
     state.echokit_adapter
         .forward_audio(session_id, audio_data)
@@ -391,6 +416,16 @@ async fn handle_client_command(
 
                     info!("✅ Bridge session {} bound to existing EchoKit session {}",
                           session_id, existing_ek_session);
+
+                    // 🔑 关键修复：每轮对话都需要发送 StartChat 命令
+                    // EchoKit Server 期望在每轮对话开始时收到 StartChat
+                    if matches!(cmd, ClientCommand::StartChat) {
+                        if let Err(e) = state.echokit_adapter.send_start_chat(&existing_ek_session).await {
+                            error!("Failed to send StartChat command to EchoKit: {}", e);
+                        } else {
+                            info!("📤 StartChat command sent to EchoKit for session {}", existing_ek_session);
+                        }
+                    }
                 } else {
                     // 首次创建 EchoKit 会话
                     match state.echokit_adapter
@@ -446,6 +481,11 @@ async fn handle_client_command(
                 }
 
                 debug!("Audio submission completed for session {}", session_id);
+
+                // 🔄 重置本轮对话的 StartChat 标记
+                // 下一轮对话需要重新发送 StartChat
+                state.session_manager.reset_start_chat_flag(session_id).await;
+                debug!("🔄 Reset StartChat flag for next conversation round");
 
                 // 注意：不在这里清理会话
                 // 会话会在收到 EchoKit 的 EndAudio 或 EndResponse 事件后自动清理

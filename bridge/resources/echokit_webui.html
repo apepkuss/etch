@@ -630,17 +630,10 @@
                         offset += chunk.length;
                     }
 
-                    // 确保字节长度是偶数（Int16Array 需要）
-                    let audioData = combinedData;
-                    if (combinedData.length % 2 !== 0) {
-                        console.warn(`音频数据长度为奇数 (${combinedData.length})，补齐到偶数`);
-                        audioData = new Uint8Array(combinedData.length + 1);
-                        audioData.set(combinedData);
-                        audioData[combinedData.length] = 0; // 补0
-                    }
-
                     // 将字节数据转换为 Int16Array（小端格式）
-                    const int16Data = new Int16Array(audioData.buffer, audioData.byteOffset, audioData.byteLength / 2);
+                    // 修复：与 EchoKit Server WebUI 保持一致，直接使用 combinedData.buffer
+                    // 不需要额外的 byteOffset 和 byteLength 参数，避免字节对齐问题
+                    const int16Data = new Int16Array(combinedData.buffer);
 
                     // 直接使用 Int16 数据创建 WAV 文件
                     const wavBlob = this.createWavFileFromInt16(int16Data, 16000);

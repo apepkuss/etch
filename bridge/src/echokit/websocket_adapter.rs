@@ -222,9 +222,38 @@ impl EchoKitSessionAdapter {
         Ok(())
     }
 
-    /// 启动音频接收器（从 EchoKit 接收音频并路由到设备）
+    /// 根据 Bridge Session ID 发送 StartChat 命令
+    /// 这个方法会查找对应的 EchoKit Session 并发送 StartChat
+    pub async fn send_start_chat_for_session(&self, bridge_session_id: &str) -> Result<()> {
+        // 首先获取 EchoKit session ID（作用域结束后自动释放锁）
+        let echokit_session_id = {
+            let session_mapping = self.session_mapping.read().await;
+
+            if let Some((_, echokit_session_id)) = session_mapping.get(bridge_session_id) {
+                echokit_session_id.clone()
+            } else {
+                anyhow::bail!("Bridge session {} not found in session mapping", bridge_session_id);
+            }
+        }; // session_mapping 锁在此释放
+
+        debug!(
+            "Sending StartChat for bridge session {} -> EchoKit session {}",
+            bridge_session_id, echokit_session_id
+        );
+
+        // 调用原有的 send_start_chat 方法
+        self.send_start_chat(&echokit_session_id).await
+    }
+
+    /// 启动音频接收器（从 EchoKit 接收原始 MessagePack 数据并直接转发到设备）
+    ///
+    /// 修复说明：移除了音频解包、过滤和重新封装的逻辑，改为直接转发原始 MessagePack 数据。
+    /// 这样可以：
+    /// 1. 避免丢失小音频片段（之前 < 100 字节的会被过滤）
+    /// 2. 保持数据格式与 EchoKit Server 完全一致
+    /// 3. 让客户端 WebUI 自己解析和处理数据
     pub async fn start_audio_receiver(self: Arc<Self>) {
-        info!("Starting EchoKit audio receiver");
+        info!("🎧 Starting EchoKit MessagePack data receiver (direct forwarding mode)");
 
         // 获取音频接收通道
         let mut audio_rx = {
@@ -233,133 +262,50 @@ impl EchoKitSessionAdapter {
         };
 
         if audio_rx.is_none() {
-            error!("Audio receiver channel not available");
+            error!("❌ Audio receiver channel not available");
             return;
         }
 
         let mut audio_rx = audio_rx.unwrap();
+        info!("✅ Audio receiver channel acquired, waiting for MessagePack data...");
 
-        // 持续监听音频数据
-        while let Some((echokit_session_id, audio_data)) = audio_rx.recv().await {
+        // 持续监听 MessagePack 数据
+        while let Some((echokit_session_id, raw_messagepack_data)) = audio_rx.recv().await {
             debug!(
-                "Received audio from EchoKit session {}: {} bytes",
+                "📦 Received MessagePack data from EchoKit session {}: {} bytes",
                 echokit_session_id,
-                audio_data.len()
+                raw_messagepack_data.len()
             );
 
-            // ✅ 过滤无效音频数据：太小的音频块通常是噪音或无效数据
-            const MIN_AUDIO_SIZE: usize = 100; // 最小有效音频大小（字节）
-            if audio_data.len() < MIN_AUDIO_SIZE {
-                warn!(
-                    "⚠️ Filtered out small audio chunk from EchoKit session {}: {} bytes (< {} bytes threshold)",
-                    echokit_session_id,
-                    audio_data.len(),
-                    MIN_AUDIO_SIZE
-                );
-                continue; // 跳过此音频块
-            }
-
-            info!(
-                "✅ Valid audio from EchoKit session {}: {} bytes (passed {} bytes threshold)",
-                echokit_session_id,
-                audio_data.len(),
-                MIN_AUDIO_SIZE
-            );
-
-            // 根据 echokit_session_id 找到对应的 bridge_session_id 和 device_id
-            let session_info = {
+            // 根据 echokit_session_id 找到对应的 device_id
+            let device_id = {
                 let mapping = self.session_mapping.read().await;
                 mapping
                     .iter()
                     .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
-                    .map(|(bridge_id, (dev_id, _))| (bridge_id.clone(), dev_id.clone()))
+                    .map(|(_, (dev_id, _))| dev_id.clone())
             };
 
-            if let Some((bridge_session_id, device_id)) = session_info {
-                // 发送 StartAudio 事件
-                if let Err(e) = self
-                    .connection_manager
-                    .send_server_event(
-                        &device_id,
-                        ServerEvent::StartAudio {
-                            text: "语音回复".to_string(),
-                        },
-                    )
-                    .await
-                {
-                    error!(
-                        "Failed to send StartAudio event to device {}: {}",
-                        device_id, e
-                    );
-                    continue;
-                }
-
-                debug!(
-                    "Sent StartAudio event to device {} for bridge session {}",
-                    device_id, bridge_session_id
-                );
-
-                // 分块发送音频数据（每块 2048 字节）
-                const CHUNK_SIZE: usize = 2048;
-                let chunks: Vec<_> = audio_data.chunks(CHUNK_SIZE).collect();
-                let total_chunks = chunks.len();
-
-                for (index, chunk) in chunks.into_iter().enumerate() {
-                    match self
-                        .connection_manager
-                        .send_server_event(
-                            &device_id,
-                            ServerEvent::AudioChunk {
-                                data: chunk.to_vec(),
-                            },
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            if (index + 1) % 10 == 0 || index + 1 == total_chunks {
-                                debug!(
-                                    "Sent audio chunk {}/{} ({} bytes) to device {}",
-                                    index + 1,
-                                    total_chunks,
-                                    chunk.len(),
-                                    device_id
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to send audio chunk {}/{} to device {}: {}",
-                                index + 1,
-                                total_chunks,
-                                device_id,
-                                e
-                            );
-                            break;
-                        }
+            if let Some(device_id) = device_id {
+                // 直接转发原始 MessagePack 数据到设备，不做任何处理
+                match self.connection_manager.send_binary(&device_id, raw_messagepack_data.clone()).await {
+                    Ok(_) => {
+                        debug!(
+                            "✅ Successfully forwarded {} bytes MessagePack data to device {}",
+                            raw_messagepack_data.len(),
+                            device_id
+                        );
                     }
-                }
-
-                // 发送 EndAudio 事件
-                if let Err(e) = self
-                    .connection_manager
-                    .send_server_event(&device_id, ServerEvent::EndAudio)
-                    .await
-                {
-                    error!(
-                        "Failed to send EndAudio event to device {}: {}",
-                        device_id, e
-                    );
-                } else {
-                    info!(
-                        "Completed audio stream to device {}: {} chunks ({} bytes total)",
-                        device_id,
-                        total_chunks,
-                        audio_data.len()
-                    );
+                    Err(e) => {
+                        error!(
+                            "❌ Failed to forward MessagePack data to device {}: {}",
+                            device_id, e
+                        );
+                    }
                 }
             } else {
                 warn!(
-                    "No bridge session found for EchoKit session {}",
+                    "⚠️ No device found for EchoKit session {} (MessagePack data)",
                     echokit_session_id
                 );
             }

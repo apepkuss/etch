@@ -25,6 +25,10 @@ pub struct SessionInfo {
     pub status: SessionStatus,
     pub audio_frames_sent: u64,
     pub audio_frames_received: u64,
+    /// 标记本轮对话是否已发送 StartChat 命令
+    /// 每轮对话（从第一个音频包到Submit）需要发送一次 StartChat
+    #[serde(skip)]
+    pub start_chat_sent_for_current_round: bool,
 }
 
 /// 会话管理器
@@ -54,6 +58,7 @@ impl SessionManager {
             status: SessionStatus::Active,
             audio_frames_sent: 0,
             audio_frames_received: 0,
+            start_chat_sent_for_current_round: false, // 初始化为false
         };
 
         let mut sessions = self.sessions.write().await;
@@ -193,6 +198,36 @@ impl SessionManager {
 
         stats
     }
+
+    /// 检查当前轮次是否需要发送 StartChat
+    /// 返回 true 表示需要发送
+    pub async fn needs_start_chat_for_round(&self, session_id: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            !session.start_chat_sent_for_current_round
+        } else {
+            // 会话不存在，不需要发送
+            false
+        }
+    }
+
+    /// 标记当前轮次已发送 StartChat
+    pub async fn mark_start_chat_sent(&self, session_id: &str) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.start_chat_sent_for_current_round = true;
+            debug!("Marked StartChat as sent for session {}", session_id);
+        }
+    }
+
+    /// 重置 StartChat 标记（在 Submit 后调用，准备下一轮对话）
+    pub async fn reset_start_chat_flag(&self, session_id: &str) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.start_chat_sent_for_current_round = false;
+            debug!("Reset StartChat flag for session {} (ready for next round)", session_id);
+        }
+    }
 }
 
 /// 会话统计
@@ -204,3 +239,4 @@ pub struct SessionStats {
     pub failed: usize,
     pub timeout: usize,
 }
+

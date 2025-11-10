@@ -982,26 +982,16 @@ impl EchoKitClient {
 
                         match event_type.as_str() {
                             "ASR" => {
-                                // ASR事件：提取转录文本
+                                // ASR事件：仅用于服务器端日志记录
+                                // 注意：ASR 数据已经通过 audio_callback 作为原始 MessagePack 转发给客户端
+                                // 这里不再重复转发，只记录日志用于服务器监控
                                 if let Value::Array(arr) = val {
                                     if let Some(Value::String(text_val)) = arr.first() {
                                         let asr_text = text_val.as_str().unwrap_or("");
                                         info!("📝 Received ASR from EchoKit: {}", asr_text);
 
-                                        // 转发ASR到所有活跃会话
-                                        let sessions = active_sessions.read().await;
-                                        for (session_id, _) in sessions.iter() {
-                                            if let Some(callback) = asr_callback {
-                                                info!("📤 Forwarding ASR to session: {}", session_id);
-                                                if let Err(e) = callback.send((session_id.clone(), asr_text.to_string())) {
-                                                    error!("❌ Failed to send ASR to session {}: {}", session_id, e);
-                                                } else {
-                                                    info!("✅ Successfully forwarded ASR to session {}", session_id);
-                                                }
-                                            } else {
-                                                warn!("⚠️ No ASR callback available");
-                                            }
-                                        }
+                                        // 仅用于内部监控和调试，不再转发
+                                        debug!("� ASR text for monitoring: {}", asr_text);
                                     }
                                 }
                             }
@@ -1009,7 +999,10 @@ impl EchoKitClient {
                                 // 音频块事件：提取音频数据
                                 if let Value::Array(arr) = val {
                                     if let Some(Value::Binary(audio_data)) = arr.first() {
-                                        info!("👋 Received {} from EchoKit: {} bytes", event_type, audio_data.len());
+                                                                                info!("👋 Received {} from EchoKit: {} bytes", event_type, audio_data.len());
+
+                                        // 注意：音频数据已经通过 audio_callback 作为原始 MessagePack 转发
+                                        // 这里不再重复转发，仅保留日志记录
 
                                         // 转发音频数据到所有活跃会话
                                         let sessions = active_sessions.read().await;
