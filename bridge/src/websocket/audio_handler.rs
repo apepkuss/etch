@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::echokit::EchoKitSessionAdapter;
 use super::connection_manager::DeviceConnectionManager;
 use super::session_manager::SessionManager;
+use crate::session_service::SessionService;
 
 /// 应用状态
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct AppState {
     pub connection_manager: Arc<DeviceConnectionManager>,
     pub session_manager: Arc<SessionManager>,
     pub echokit_adapter: Arc<EchoKitSessionAdapter>,
+    pub session_service: Arc<SessionService>,
 }
 
 /// WebSocket 升级处理器
@@ -54,8 +56,33 @@ pub async fn websocket_handler_with_id(
         visitor_id, record_mode
     );
 
+    // 确保设备记录存在（自动创建如果不存在）
+    let device_uuid = match state
+        .session_service
+        .ensure_device_exists(&visitor_id, Some(&format!("WebUI-{}", &visitor_id[..8])))
+        .await
+    {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            error!("Failed to ensure device exists for {}: {}", visitor_id, e);
+            // 返回错误响应
+            return ws.on_upgrade(|mut socket| async move {
+                let _ = socket
+                    .send(Message::Text(format!("Error: Failed to register device: {}", e).into()))
+                    .await;
+                let _ = socket.close().await;
+            });
+        }
+    };
+
+    let device_id = device_uuid.to_string();
+    info!(
+        "Device {} (visitor: {}) registered successfully",
+        device_id, visitor_id
+    );
+
     ws.on_upgrade(move |socket| {
-        handle_device_websocket(socket, visitor_id, record_mode, state)
+        handle_device_websocket(socket, device_id, record_mode, state)
     })
 }
 
@@ -209,7 +236,7 @@ async fn handle_control_message(
             let session_id = generate_session_id();
             info!("Device {} starting session {}", device_id, session_id);
 
-            // 绑定会话到设备
+            // 绑定会话到设备（内存中）
             state.session_manager
                 .create_session(session_id.clone(), device_id.to_string())
                 .await?;
@@ -217,6 +244,22 @@ async fn handle_control_message(
             state.connection_manager
                 .bind_session(session_id.clone(), device_id.to_string())
                 .await?;
+
+            // 持久化到数据库
+            if let Err(e) = state.session_service
+                .create_session(
+                    &session_id, // session_id
+                    &device_id, // device_id
+                    None, // user_id 暂时为空
+                    Some("device_triggered".to_string()),
+                )
+                .await
+            {
+                error!("Failed to persist session {} to database: {}", session_id, e);
+                // 继续处理，不阻断会话创建
+            } else {
+                debug!("Session {} persisted to database", session_id);
+            }
 
             // 创建 EchoKit 会话
             let echokit_config = echo_shared::EchoKitConfig::default();
@@ -259,9 +302,26 @@ async fn handle_control_message(
                     error!("Failed to close EchoKit session: {}", e);
                 }
 
+                // 更新内存会话状态
                 state.session_manager.end_session(&session_id).await?;
                 state.connection_manager.unbind_session(&session_id).await?;
                 *active_session = None;
+
+                // 更新数据库会话状态
+                if let Err(e) = state.session_service
+                    .update_session(
+                        &session_id,
+                        echo_shared::database::SessionStatus::Completed,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    error!("Failed to update session {} in database: {}", session_id, e);
+                } else {
+                    debug!("Session {} marked as completed in database", session_id);
+                }
 
                 // 响应设备
                 let response = serde_json::json!({

@@ -1,19 +1,19 @@
 // Bridge服务会话管理 - 存储层集成
 use std::sync::Arc;
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row, FromRow};
 use echo_shared::{DatabaseError};
 use echo_shared::database::SessionStatus;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 // 会话记录（对应数据库sessions表）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRow)]
 pub struct SessionRecord {
     pub id: Uuid,
     pub device_id: Uuid,
     pub user_id: Option<Uuid>,
-    pub status: SessionStatus,
+    pub status: String, // 使用 String 而不是 SessionStatus，避免编译时类型检查
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
     pub wake_reason: Option<String>,
@@ -37,11 +37,13 @@ impl SessionService {
     /// 创建新会话
     pub async fn create_session(
         &self,
+        session_id: &str,
         device_id: &str,
         user_id: Option<&str>,
         wake_reason: Option<String>,
     ) -> Result<SessionRecord> {
-        let session_id = Uuid::new_v4();
+        let session_uuid = Uuid::parse_str(session_id)
+            .map_err(|_| DatabaseError::InvalidInput("Invalid session ID".to_string()))?;
         let device_uuid = Uuid::parse_str(device_id)
             .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
 
@@ -52,19 +54,26 @@ impl SessionService {
             None
         };
 
-        let record = sqlx::query!(
+        let status_str = match SessionStatus::Active {
+            SessionStatus::Active => "active",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Failed => "failed",
+            SessionStatus::Timeout => "timeout",
+        };
+
+        let record = sqlx::query_as::<_, SessionRecord>(
             r#"
             INSERT INTO sessions (id, device_id, user_id, status, wake_reason)
             VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, device_id, user_id, status as "status: SessionStatus",
+            RETURNING id, device_id, user_id, status,
                       started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
-            "#,
-            session_id,
-            device_uuid,
-            user_uuid,
-            "active" as SessionStatus,
-            wake_reason
+            "#
         )
+        .bind(session_uuid)
+        .bind(device_uuid)
+        .bind(user_uuid)
+        .bind(status_str)
+        .bind(wake_reason)
         .fetch_one(self.db.as_ref())
         .await
         .map_err(DatabaseError::Connection)?;
@@ -84,28 +93,34 @@ impl SessionService {
         let session_uuid = Uuid::parse_str(session_id)
             .map_err(|_| DatabaseError::InvalidInput("Invalid session ID".to_string()))?;
 
-        let record = sqlx::query_as!(
-            SessionRecord,
+        let status_str = match status {
+            SessionStatus::Active => "active",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Failed => "failed",
+            SessionStatus::Timeout => "timeout",
+        };
+
+        let record = sqlx::query_as::<_, SessionRecord>(
             r#"
             UPDATE sessions
             SET status = $1,
                 transcript = COALESCE($2, transcript),
                 response = COALESCE($3, response),
                 audio_url = COALESCE($4, audio_url),
-                ended_at = CASE WHEN $5 = 'completed' THEN NOW() ELSE ended_at END
-            WHERE id = $6
-            RETURNING id, device_id, user_id, status as "status: SessionStatus",
+                ended_at = CASE WHEN $1 = 'completed' THEN NOW() ELSE ended_at END
+            WHERE id = $5
+            RETURNING id, device_id, user_id, status,
                       started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
-            "#,
-            status as SessionStatus,
-            transcript,
-            response,
-            audio_url,
-            session_uuid
+            "#
         )
+        .bind(status_str)
+        .bind(transcript)
+        .bind(response)
+        .bind(audio_url)
+        .bind(session_uuid)
         .fetch_optional(self.db.as_ref())
         .await
-        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+        .map_err(DatabaseError::Connection)?;
 
         Ok(record)
     }
@@ -115,19 +130,18 @@ impl SessionService {
         let session_uuid = Uuid::parse_str(session_id)
             .map_err(|_| DatabaseError::InvalidInput("Invalid session ID".to_string()))?;
 
-        let record = sqlx::query_as!(
-            SessionRecord,
+        let record = sqlx::query_as::<_, SessionRecord>(
             r#"
-            SELECT id, device_id, user_id, status as "status: SessionStatus",
+            SELECT id, device_id, user_id, status,
                    started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
             FROM sessions
             WHERE id = $1
-            "#,
-            session_uuid
+            "#
         )
+        .bind(session_uuid)
         .fetch_optional(self.db.as_ref())
         .await
-        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+        .map_err(DatabaseError::Connection)?;
 
         Ok(record)
     }
@@ -142,29 +156,22 @@ impl SessionService {
         let device_uuid = Uuid::parse_str(device_id)
             .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
 
-        let mut query = sqlx::query_as!(
-            SessionRecord,
-            r#"
-            SELECT id, device_id, user_id, status as "status: SessionStatus",
+        let sql = r#"
+            SELECT id, device_id, user_id, status,
                    started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
             FROM sessions
             WHERE device_id = $1
             ORDER BY started_at DESC
-            "#,
-            device_uuid
-        );
+            LIMIT $2 OFFSET $3
+        "#;
 
-        if let Some(limit_val) = limit {
-            query = query.limit(limit_val);
-        }
-        if let Some(offset_val) = offset {
-            query = query.offset(offset_val);
-        }
-
-        let records = query
+        let records = sqlx::query_as::<_, SessionRecord>(sql)
+            .bind(device_uuid)
+            .bind(limit.unwrap_or(100))
+            .bind(offset.unwrap_or(0))
             .fetch_all(self.db.as_ref())
             .await
-            .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+            .map_err(DatabaseError::Connection)?;
 
         Ok(records)
     }
@@ -179,39 +186,31 @@ impl SessionService {
         let user_uuid = Uuid::parse_str(user_id)
             .map_err(|_| DatabaseError::InvalidInput("Invalid user ID".to_string()))?;
 
-        let mut query = sqlx::query_as!(
-            SessionRecord,
-            r#"
-            SELECT id, device_id, user_id, status as "status: SessionStatus",
+        let sql = r#"
+            SELECT id, device_id, user_id, status,
                    started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
             FROM sessions
             WHERE user_id = $1
             ORDER BY started_at DESC
-            "#,
-            user_uuid
-        );
+            LIMIT $2 OFFSET $3
+        "#;
 
-        if let Some(limit_val) = limit {
-            query = query.limit(limit_val);
-        }
-        if let Some(offset_val) = offset {
-            query = query.offset(offset_val);
-        }
-
-        let records = query
+        let records = sqlx::query_as::<_, SessionRecord>(sql)
+            .bind(user_uuid)
+            .bind(limit.unwrap_or(100))
+            .bind(offset.unwrap_or(0))
             .fetch_all(self.db.as_ref())
             .await
-            .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+            .map_err(DatabaseError::Connection)?;
 
         Ok(records)
     }
 
     /// 获取活跃会话
     pub async fn get_active_sessions(&self) -> Result<Vec<SessionRecord>> {
-        let records = sqlx::query_as!(
-            SessionRecord,
+        let records = sqlx::query_as::<_, SessionRecord>(
             r#"
-            SELECT id, device_id, user_id, status as "status: SessionStatus",
+            SELECT id, device_id, user_id, status,
                    started_at, ended_at, wake_reason, transcript, response, audio_url, metadata
             FROM sessions
             WHERE status = 'active'
@@ -220,26 +219,26 @@ impl SessionService {
         )
         .fetch_all(self.db.as_ref())
         .await
-        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+        .map_err(DatabaseError::Connection)?;
 
         Ok(records)
     }
 
     /// 结束超时的会话
     pub async fn timeout_sessions(&self, timeout_minutes: i64) -> Result<u64> {
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             UPDATE sessions
             SET status = 'timeout',
                 ended_at = NOW()
             WHERE status = 'active'
               AND started_at < NOW() - INTERVAL '1 minute' * $1
-            "#,
-            timeout_minutes
+            "#
         )
+        .bind(timeout_minutes)
         .execute(self.db.as_ref())
         .await
-        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+        .map_err(DatabaseError::Connection)?;
 
         Ok(result.rows_affected())
     }
@@ -250,40 +249,123 @@ impl SessionService {
         device_id: Option<&str>,
         hours_back: Option<i32>,
     ) -> Result<SessionStats> {
-        let mut query = sqlx::query!(
-            r#"
-            SELECT
-                COUNT(*) as total_sessions,
-                COUNT(CASE WHEN status = 'active' THEN 1 END) as active_sessions,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_sessions,
-                COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_sessions,
-                COUNT(CASE WHEN status = 'timeout' THEN 1 END) as timeout_sessions,
-                AVG(EXTRACT(EPOCH FROM (ended_at - started_at))/60) as avg_duration_minutes
-            FROM sessions
-            WHERE started_at >= NOW() - INTERVAL '1 hour' * $1
-            "#,
-            hours_back.unwrap_or(24)
-        );
+        let hours = hours_back.unwrap_or(24);
 
-        if let Some(did) = device_id {
-            let device_uuid = Uuid::parse_str(did)
+        let (sql, device_uuid) = if let Some(did) = device_id {
+            let uuid = Uuid::parse_str(did)
                 .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
-            query = query.bind(device_uuid);
-        }
+            (
+                r#"
+                SELECT
+                    COUNT(*) as "total!",
+                    COUNT(CASE WHEN status = 'active' THEN 1 END) as "active!",
+                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as "completed!",
+                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as "failed!",
+                    COUNT(CASE WHEN status = 'timeout' THEN 1 END) as "timeout!",
+                    AVG(EXTRACT(EPOCH FROM (ended_at - started_at))/60) as avg_duration
+                FROM sessions
+                WHERE started_at >= NOW() - INTERVAL '1 hour' * $1
+                  AND device_id = $2
+                "#,
+                Some(uuid)
+            )
+        } else {
+            (
+                r#"
+                SELECT
+                    COUNT(*) as "total!",
+                    COUNT(CASE WHEN status = 'active' THEN 1 END) as "active!",
+                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as "completed!",
+                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as "failed!",
+                    COUNT(CASE WHEN status = 'timeout' THEN 1 END) as "timeout!",
+                    AVG(EXTRACT(EPOCH FROM (ended_at - started_at))/60) as avg_duration
+                FROM sessions
+                WHERE started_at >= NOW() - INTERVAL '1 hour' * $1
+                "#,
+                None
+            )
+        };
 
-        let stats = query
-            .fetch_one(self.db.as_ref())
-            .await
-            .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+        let row = if let Some(uuid) = device_uuid {
+            sqlx::query(sql)
+                .bind(hours)
+                .bind(uuid)
+                .fetch_one(self.db.as_ref())
+                .await
+        } else {
+            sqlx::query(sql)
+                .bind(hours)
+                .fetch_one(self.db.as_ref())
+                .await
+        }.map_err(DatabaseError::Connection)?;
 
         Ok(SessionStats {
-            total_sessions: stats.total_sessions.unwrap_or(0) as i64,
-            active_sessions: stats.active_sessions.unwrap_or(0) as i64,
-            completed_sessions: stats.completed_sessions.unwrap_or(0) as i64,
-            failed_sessions: stats.failed_sessions.unwrap_or(0) as i64,
-            timeout_sessions: stats.timeout_sessions.unwrap_or(0) as i64,
-            avg_duration_minutes: stats.avg_duration_minutes.map(|v| v as i64),
+            total_sessions: row.try_get("total").unwrap_or(0),
+            active_sessions: row.try_get("active").unwrap_or(0),
+            completed_sessions: row.try_get("completed").unwrap_or(0),
+            failed_sessions: row.try_get("failed").unwrap_or(0),
+            timeout_sessions: row.try_get("timeout").unwrap_or(0),
+            avg_duration_minutes: row.try_get::<Option<f64>, _>("avg_duration").ok().flatten().map(|v| v as i64),
         })
+    }
+
+    /// 确保设备存在（如果不存在则创建）
+    ///
+    /// 对于 WebUI 连接，使用浏览器指纹 (visitor_id) 作为设备 ID
+    /// 如果设备不存在，则自动创建一个 WebUI 设备记录
+    pub async fn ensure_device_exists(
+        &self,
+        device_id: &str,
+        device_name: Option<&str>,
+    ) -> Result<Uuid, DatabaseError> {
+        // 解析 device_id 为 UUID，如果失败则创建新的 UUID
+        let device_uuid = if let Ok(uuid) = Uuid::parse_str(device_id) {
+            uuid
+        } else {
+            // visitor_id 不是标准 UUID 格式，使用确定性哈希转换为 UUID
+            // 这样同一个 visitor_id 总是得到相同的 UUID
+            let hash = md5::compute(device_id);
+            let hash_bytes = hash.0;
+            Uuid::from_slice(&hash_bytes).map_err(|e| {
+                DatabaseError::InvalidInput(format!("Failed to create UUID from visitor_id: {}", e))
+            })?
+        };
+
+        // 检查设备是否已存在
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1)"
+        )
+        .bind(&device_uuid)
+        .fetch_one(&*self.db)
+        .await
+        .map_err(|e| DatabaseError::InvalidInput(format!("Failed to check device existence: {}", e)))?;
+
+        if exists {
+            return Ok(device_uuid);
+        }
+
+        // 设备不存在，创建新记录
+        let name = device_name.unwrap_or("WebUI 设备");
+
+        sqlx::query(
+            "INSERT INTO devices (id, name, device_type, status, created_at, updated_at)
+             VALUES ($1, $2, 'web_browser', 'online', NOW(), NOW())
+             ON CONFLICT (id) DO NOTHING"
+        )
+        .bind(&device_uuid)
+        .bind(name)
+        .execute(&*self.db)
+        .await
+        .map_err(|e| DatabaseError::InvalidInput(format!("Failed to create device: {}", e)))?;
+
+        tracing::info!(
+            "Created new WebUI device: id={}, name={}, visitor_id={}",
+            device_uuid,
+            name,
+            device_id
+        );
+
+        Ok(device_uuid)
     }
 }
 

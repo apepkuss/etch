@@ -4,8 +4,10 @@ mod audio_processor;
 mod udp_server;
 mod mqtt_client;
 mod websocket;
+mod session_service;
 
 use anyhow::{Context, Result};
+use sqlx::postgres::PgPoolOptions;
 use echo_shared::{
     EchoKitConfig, AudioFormat, WebSocketMessage,
     generate_session_id, DeviceStatus, TopicFilter, QoS, WakeReason
@@ -62,6 +64,8 @@ struct BridgeService {
     heartbeat_monitor: Arc<websocket::heartbeat::HeartbeatMonitor>,
     flow_controller: Arc<websocket::flow_control::FlowController>,
     echokit_adapter: Arc<echokit::EchoKitSessionAdapter>,
+    // 数据库持久化
+    session_service: Arc<session_service::SessionService>,
 }
 
 // 会话信息
@@ -91,6 +95,23 @@ async fn main() -> Result<()> {
     // 加载配置
     let config = load_config().await?;
     info!("Bridge configuration: {:?}", config);
+
+    // 初始化数据库连接
+    info!("Initializing database connection...");
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://echo_user:echo_password@localhost:10035/echo_db".to_string());
+
+    let db_pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .with_context(|| "Failed to connect to database")?;
+
+    info!("Database connected successfully");
+
+    // 创建 SessionService
+    let session_service = Arc::new(session_service::SessionService::new(Arc::new(db_pool)));
+    info!("SessionService initialized");
 
     // 创建设备音频输出通道
     let (audio_output_tx, audio_output_rx) = mpsc::unbounded_channel();
@@ -208,6 +229,7 @@ async fn main() -> Result<()> {
         heartbeat_monitor: heartbeat_monitor.clone(),
         flow_controller: flow_controller.clone(),
         echokit_adapter: echokit_adapter.clone(),
+        session_service: session_service.clone(),
     };
 
     // 启动 MQTT 事件循环
@@ -430,6 +452,7 @@ impl BridgeService {
         });
 
         // 启动 WebSocket 服务器
+        let session_service_for_ws = self.session_service.clone();
         tokio::spawn(async move {
             use axum::{
                 extract::State,
@@ -442,6 +465,7 @@ impl BridgeService {
                 connection_manager,
                 session_manager,
                 echokit_adapter,
+                session_service: session_service_for_ws,
             };
 
             let app = Router::new()
