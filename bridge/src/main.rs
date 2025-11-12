@@ -408,8 +408,11 @@ impl BridgeService {
 
     // 启动健康检查服务
     async fn start_health_check_service(&self) -> Result<()> {
-        let bind_address = "0.0.0.0:8082".to_string(); // 健康检查端口
-        let ws_bind_address = "0.0.0.0:10031".to_string(); // WebSocket 端口
+        // 从环境变量读取 WebSocket 端口，默认 10031
+        let websocket_port = std::env::var("WEBSOCKET_PORT")
+            .unwrap_or_else(|_| "10031".to_string());
+        // 健康检查、WebSocket 和静态文件服务使用同一个端口
+        let bind_address = format!("0.0.0.0:{}", websocket_port);
         let echokit_manager = self.echokit_manager.clone();
         let udp_server = self.udp_server.clone();
         let active_sessions = self.active_sessions.clone();
@@ -418,16 +421,17 @@ impl BridgeService {
         let session_manager = self.session_manager.clone();
         let echokit_adapter = self.echokit_adapter.clone();
 
-        // 启动健康检查 HTTP 服务
+        // 启动统一的 HTTP/WebSocket 服务器（健康检查、WebSocket、静态文件）
+        let session_service_for_ws = self.session_service.clone();
         tokio::spawn(async move {
             use axum::{
-                extract::State,
-                response::Json,
                 routing::get,
                 Router,
             };
+            use tower_http::services::ServeDir;
 
-            let app = Router::new()
+            // 健康检查路由
+            let health_router = Router::new()
                 .route("/health", get(health_check))
                 .route("/stats", get(get_stats))
                 .with_state(AppState {
@@ -437,51 +441,31 @@ impl BridgeService {
                     audio_processor,
                 });
 
-            info!("Health check service listening on: {}", bind_address);
-
-            let listener = match tokio::net::TcpListener::bind(&bind_address).await {
-                Ok(l) => l,
-                Err(e) => {
-                    warn!("Failed to bind health check service on {}: {}. Skipping health check service.", bind_address, e);
-                    return;
-                }
-            };
-            if let Err(e) = axum::serve(listener, app).await {
-                error!("Health check service error: {}", e);
-            }
-        });
-
-        // 启动 WebSocket 服务器
-        let session_service_for_ws = self.session_service.clone();
-        tokio::spawn(async move {
-            use axum::{
-                extract::State,
-                routing::get,
-                Router,
-            };
-            use tower_http::services::ServeDir;
-
-            let ws_state = websocket::audio_handler::AppState {
-                connection_manager,
-                session_manager,
-                echokit_adapter,
-                session_service: session_service_for_ws,
-            };
-
-            let app = Router::new()
-                // WebSocket 路由
+            // WebSocket 路由
+            let ws_router = Router::new()
                 .route("/ws/audio", get(websocket::audio_handler::websocket_handler))
                 .route("/ws/{id}", get(websocket::audio_handler::websocket_handler_with_id))
-                .with_state(ws_state)
-                // 静态文件服务：提供 resources/ 目录下的文件
+                .with_state(websocket::audio_handler::AppState {
+                    connection_manager,
+                    session_manager,
+                    echokit_adapter,
+                    session_service: session_service_for_ws,
+                });
+
+            // 合并所有路由
+            let app = Router::new()
+                .merge(health_router)
+                .merge(ws_router)
                 .fallback_service(ServeDir::new("resources"));
 
-            info!("WebSocket server listening on: {}", ws_bind_address);
-            info!("Static files served from: resources/");
+            info!("HTTP/WebSocket server listening on: {}", bind_address);
+            info!("  - Health check: http://{}/health", bind_address);
+            info!("  - WebSocket: ws://{}/ws/audio", bind_address);
+            info!("  - Static files: http://{}/bridge_webui.html", bind_address);
 
-            let listener = tokio::net::TcpListener::bind(&ws_bind_address).await.unwrap();
+            let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
             if let Err(e) = axum::serve(listener, app).await {
-                error!("WebSocket server error: {}", e);
+                error!("HTTP/WebSocket server error: {}", e);
             }
         });
 
