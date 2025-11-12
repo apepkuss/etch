@@ -95,11 +95,11 @@ services:
       # MQTT 配置
       MQTT_BROKER_URL: tcp://mqtt:1883
       # 网络配置
-      WEBSOCKET_PORT: 8082
+      WEBSOCKET_PORT: 10031
       UDP_PORT: 8083
     ports:
-      - "10031:8082"  # WebSocket
-      - "10032:8083"  # UDP
+      - "10031:10031"  # WebSocket
+      - "10032:8083"   # UDP
     networks:
       - echo-network
     depends_on:

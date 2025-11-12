@@ -282,6 +282,8 @@ show_access_urls() {
     echo "  🔌 API Gateway:    http://localhost:10033"
     echo "  🌐 Bridge服务:     ws://localhost:10031 (WebSocket)"
     echo "                     udp://localhost:10032 (UDP音频)"
+    echo "  🧪 Bridge WebUI:   http://localhost:10031/bridge_webui.html"
+    echo "     (WebSocket测试界面，使用FingerprintJS生成设备ID)"
     echo "  🧠 EchoKit Server: https://indie.echokit.dev (外部服务)"
     echo "  🗄️  数据库管理:     http://localhost:10037"
     echo "     邮箱: admin@echo-system.com, 密码: admin123"

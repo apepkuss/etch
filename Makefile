@@ -169,7 +169,8 @@ test-redis: ## 测试 Redis 连接
 
 test-bridge: ## 测试 Bridge 服务连接
 	@echo "测试 Bridge 服务连接..."
-	curl -f http://localhost:10031/health || echo "Bridge 服务连接失败"
+	@curl -f http://localhost:10031/health && echo "✅ Bridge 健康检查通过" || echo "❌ Bridge 服务连接失败"
+	@curl -f http://localhost:10031/bridge_webui.html > /dev/null 2>&1 && echo "✅ Bridge WebUI 可访问" || echo "⚠️  Bridge WebUI 不可访问"
 
 # 安全和维护命令
 security-check: ## 安全检查
@@ -203,6 +204,7 @@ ports: ## 显示端口映射
 	@echo "Web 管理界面:    http://localhost:10034"
 	@echo "API Gateway:     http://localhost:10033"
 	@echo "Bridge WebSocket: ws://localhost:10031"
+	@echo "Bridge WebUI:    http://localhost:10031/bridge_webui.html"
 	@echo "Bridge UDP:      udp://localhost:10032"
 	@echo "PostgreSQL:      localhost:10035"
 	@echo "Redis:           localhost:10036"
@@ -218,7 +220,9 @@ urls: ## 显示所有访问 URL
 	@echo "🔌 API Gateway:    http://localhost:10033"
 	@echo "🌐 Bridge服务:     ws://localhost:10031 (WebSocket)"
 	@echo "                   udp://localhost:10032 (UDP音频)"
-	@echo "🧠 EchoKit Server: wss://indie.echokit.dev/ws/{visitor_id} (外部AI服务)"
+	@echo "� Bridge WebUI:   http://localhost:10031/bridge_webui.html"
+	@echo "     (WebSocket测试界面，使用FingerprintJS生成设备ID)"
+	@echo "�🧠 EchoKit Server: wss://indie.echokit.dev/ws/{visitor_id} (外部AI服务)"
 	@echo "🗄️  数据库管理:     http://localhost:10037"
 	@echo "     邮箱: admin@echo-system.com, 密码: admin123"
 	@echo "💾 Redis管理:      http://localhost:10038"
@@ -236,6 +240,11 @@ deploy: ## 完整部署流程
 	make build
 	make up
 	make verify
+	@echo ""
+	@echo "🎉 部署完成！"
+	@echo "📋 运行 'make urls' 查看所有访问地址"
+	@echo "🧪 快速测试 Bridge WebUI: http://localhost:10031/bridge_webui.html"
+	@echo ""
 
 reset: ## 完全重置系统（危险操作）
 	@echo "警告：这将删除所有容器、网络和数据！"

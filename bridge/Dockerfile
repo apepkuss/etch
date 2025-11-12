@@ -39,6 +39,9 @@ WORKDIR /app
 # 从构建阶段复制编译后的二进制文件
 COPY --from=builder /app/target/release/echo-bridge /usr/local/bin/
 
+# 复制 resources 目录（包含 WebUI）
+COPY --from=builder /app/bridge/resources /app/resources
+
 # 创建配置目录
 RUN mkdir -p /app/config
 
