@@ -185,27 +185,21 @@ pub async fn delete_device(
     // 首先检查设备是否存在
     match app_state.database.get_device_by_id(&device_id).await {
         Ok(Some(_device)) => {
-            // TODO: 实现数据库删除操作
-            // match app_state.database.delete_device(&device_id).await {
-            //     Ok(()) => {
-            //         let response = json!({
-            //             "message": "Device deleted successfully",
-            //             "device_id": device_id
-            //         });
-            //         Json(ApiResponse::success(response))
-            //     }
-            //     Err(e) => {
-            //         error!("Failed to delete device: {}", e);
-            //         Json(ApiResponse::error("Failed to delete device".to_string()))
-            //     }
-            // }
-
-            // 暂时返回成功响应
-            let response = json!({
-                "message": "Device deletion not yet implemented",
-                "device_id": device_id
-            });
-            Json(ApiResponse::success(response))
+            // 实现数据库删除操作
+            match app_state.database.delete_device(&device_id).await {
+                Ok(()) => {
+                    info!("Device {} deleted successfully", device_id);
+                    let response = json!({
+                        "message": "Device deleted successfully",
+                        "device_id": device_id
+                    });
+                    Json(ApiResponse::success(response))
+                }
+                Err(e) => {
+                    error!("Failed to delete device: {}", e);
+                    Json(ApiResponse::error("Failed to delete device".to_string()))
+                }
+            }
         }
         Ok(None) => {
             Json(ApiResponse::error("Device not found".to_string()))
