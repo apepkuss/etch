@@ -55,12 +55,14 @@ pub async fn auth_middleware(
         }
     }
 
-    // 对于不需要认证的路径（如健康检查、登录等），直接通过
+    // 对于不需要认证的路径（如健康检查、登录、设备注册等），直接通过
     let path = req.uri().path();
     if path == "/health"
         || path.starts_with("/health")
         || path.starts_with("/auth")
         || path.starts_with("/api/v1/auth")
+        || path.starts_with("/api/v1/devices/register")
+        || path.starts_with("/api/v1/devices/verify")
         || path == "/ws" {
         return Ok(next.run(req).await);
     }

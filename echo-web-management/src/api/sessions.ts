@@ -6,6 +6,10 @@ export interface SessionStats {
   active: number;
   completed: number;
   interrupted: number;
+  failed?: number;
+  timeout?: number;
+  today_sessions?: number;
+  average_duration_seconds?: number;
 }
 
 // 会话 API 服务
@@ -24,8 +28,20 @@ export const sessionsApi = {
   // 获取会话统计
   async getSessionStats(): Promise<SessionStats> {
     try {
-      const response = await apiClient.get<ApiResponse<SessionStats>>('/sessions/stats');
-      return response.data.data;
+      const response = await apiClient.get<ApiResponse<any>>('/sessions/stats');
+      const apiData = response.data.data;
+
+      // 转换API数据格式为前端期望的格式
+      return {
+        total: apiData.total || 0,
+        active: apiData.active || 0,
+        completed: apiData.completed || 0,
+        interrupted: (apiData.failed || 0) + (apiData.timeout || 0),
+        failed: apiData.failed,
+        timeout: apiData.timeout,
+        today_sessions: apiData.today_sessions,
+        average_duration_seconds: apiData.average_duration_seconds,
+      };
     } catch (error) {
       console.error('Failed to fetch session stats:', error);
       throw error;

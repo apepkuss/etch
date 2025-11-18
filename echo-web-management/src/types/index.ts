@@ -14,9 +14,7 @@ export interface Device {
 }
 
 export const DeviceType = {
-  Speaker: 'Speaker',
-  Display: 'Display',
-  Hub: 'Hub'
+  Speaker: 'speaker'
 } as const;
 
 export type DeviceType = typeof DeviceType[keyof typeof DeviceType];
@@ -25,7 +23,9 @@ export const DeviceStatus = {
   Online: 'Online',
   Offline: 'Offline',
   Maintenance: 'Maintenance',
-  Error: 'Error'
+  Error: 'Error',
+  Pending: 'Pending',
+  RegistrationExpired: 'RegistrationExpired'
 } as const;
 
 export type DeviceStatus = typeof DeviceStatus[keyof typeof DeviceStatus];
@@ -188,3 +188,77 @@ export interface UserFormData {
   password?: string;
   role: UserRole;
 }
+
+// 设备注册相关类型定义
+export interface DeviceRegistrationRequest {
+  name: string;
+  device_type: DeviceType;
+  device_id?: string;           // 生成的设备ID ECHO_SN_MAC
+  serial_number?: string;       // 设备序列号
+  mac_address?: string;         // MAC地址
+}
+
+export interface DeviceRegistrationResponse {
+  device_id: string;
+  pairing_code: string;
+  qr_token: string;
+  qr_code_data: string; // Base64 encoded QR code image
+  expires_at: string;
+  device_type: DeviceType;
+}
+
+export interface DeviceVerificationRequest {
+  pairing_code: string;
+  device_info?: DeviceInfo;
+}
+
+export interface DeviceInfo {
+  mac_address?: string;
+  firmware_version?: string;
+  hardware_version?: string;
+  serial_number?: string;
+}
+
+export interface DeviceVerificationResponse {
+  device_id: string;
+  success: boolean;
+  message: string;
+  device_config?: DeviceConfig;
+}
+
+export interface RegistrationExtensionRequest {
+  device_id: string;
+  extension_duration_minutes?: number; // 默认15分钟
+}
+
+export interface RegistrationExtensionResponse {
+  success: boolean;
+  new_expires_at: string;
+  extension_duration_minutes: number;
+  message: string;
+}
+
+export interface PendingRegistration {
+  device_id: string;
+  device_name: string;
+  device_type: DeviceType;
+  location: string;
+  pairing_code: string;
+  registration_initiated: string;
+  expires_at: string;
+  attempts_count: number;
+  max_attempts: number;
+  registration_status: 'pending' | 'expired' | 'attempts_exceeded';
+}
+
+export const RegistrationStage = {
+  Created: 'Created',
+  WaitingForScan: 'WaitingForScan',
+  Scanning: 'Scanning',
+  Verifying: 'Verifying',
+  Verified: 'Verified',
+  Failed: 'Failed',
+  Expired: 'Expired'
+} as const;
+
+export type RegistrationStage = typeof RegistrationStage[keyof typeof RegistrationStage];

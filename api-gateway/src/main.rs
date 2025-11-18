@@ -137,31 +137,30 @@ async fn main() -> Result<()> {
     // 创建应用（使用真正的handlers和AppState）
     let app_state = AppState::new().await?;
 
-    // 创建 API v1 路由组合
+    // 创建 API v1 路由组合（需要认证）
     let api_v1_routes = Router::new()
         .nest("/auth", auth_routes())
         .nest("/devices", device_routes())
         .nest("/users", user_routes())
-        .nest("/sessions", session_routes());
+        .nest("/sessions", session_routes())
+        .layer(axum::middleware::from_fn(auth_middleware));
 
     let app = Router::new()
         // 健康检查路由（无需认证）
-        .route("/health", get(handlers::health::health_check))
         .nest("/health", health_routes())
 
-        // WebSocket 路由
+        // WebSocket 路由（无需认证）
         .route("/ws", get(websocket_handler))
 
         // API v1 路由（需要认证）
         .nest("/api/v1", api_v1_routes)
 
         .with_state(app_state)
-        .layer(axum::middleware::from_fn(request_logging))
-        .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
+        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
+        .layer(axum::middleware::from_fn(request_logging));
 
     // 启动服务器
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     info!("API Gateway listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

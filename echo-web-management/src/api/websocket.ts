@@ -170,3 +170,4 @@ export const websocketService = new WebSocketService();
 
 // 导出类型和服务
 export { WebSocketService as default };
+export { WebSocketService };

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { Device, DeviceStatus, DeviceConfig, ApiResponse } from '../types';
+import { Device, DeviceStatus, DeviceConfig } from '../types';
 import { devicesApi } from '../api';
+import { DeviceStats } from '../api/devices';
 import { websocketService } from '../api/websocket';
 
 interface DeviceStore {
@@ -11,12 +12,7 @@ interface DeviceStore {
   error: string | null;
 
   // 设备统计
-  stats: {
-    total: number;
-    online: number;
-    offline: number;
-    error: number;
-  };
+  stats: DeviceStats;
 
   // 操作
   fetchDevices: () => Promise<void>;
@@ -41,6 +37,13 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
     online: 0,
     offline: 0,
     error: 0,
+    maintenance: 0,
+    pending: 0,
+    by_type: {
+      speaker: 0,
+      display: 0,
+      hub: 0,
+    },
   },
 
   // 获取设备列表
@@ -183,7 +186,7 @@ websocketService.connect({
     // 处理设备状态更新
     if (message.DeviceStatusUpdate) {
       const { device_id, status } = message.DeviceStatusUpdate;
-      get().updateDeviceStatus(device_id, status);
+      useDeviceStore.getState().updateDeviceStatus(device_id, status);
     }
   },
   onDisconnect: () => {

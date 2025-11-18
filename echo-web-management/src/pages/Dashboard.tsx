@@ -12,12 +12,14 @@ import { useSessionStore } from '../stores/useSessionStore';
 import { DeviceStatus, DeviceType } from '../types';
 
 export const Dashboard: React.FC = () => {
-  const { devices, stats, loading, fetchDevices } = useDeviceStore();
-  const { activeSessions, stats: sessionStats } = useSessionStore();
+  const { devices, stats, loading, fetchDevices, fetchDeviceStats } = useDeviceStore();
+  const { activeSessions, stats: sessionStats, fetchSessionStats } = useSessionStore();
 
   useEffect(() => {
     fetchDevices();
-  }, [fetchDevices]);
+    fetchDeviceStats();
+    fetchSessionStats();
+  }, [fetchDevices, fetchDeviceStats, fetchSessionStats]);
 
   return (
     <div style={{ padding: 24 }}>
@@ -54,7 +56,7 @@ export const Dashboard: React.FC = () => {
           <Card>
             <Statistic
               title="活跃会话"
-              value={sessionStats.activeNow}
+              value={sessionStats.active}
               valueStyle={{ color: '#1890ff' }}
               prefix={<PlayCircleOutlined />}
             />
@@ -63,8 +65,8 @@ export const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic
-              title="今日会话"
-              value={sessionStats.totalToday}
+              title="总会话数"
+              value={sessionStats.total}
               prefix={<HistoryOutlined />}
             />
           </Card>
@@ -118,8 +120,7 @@ export const Dashboard: React.FC = () => {
                 <Col xs={24} sm={12} lg={6} key={device.id}>
                   <Card size="small" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 24, marginBottom: 8 }}>
-                      {device.type === DeviceType.SPEAKER ? '🔊' :
-                       device.type === DeviceType.DISPLAY ? '📱' : '🎛️'}
+                      {device.device_type === DeviceType.Speaker ? '🔊' : '🎛️'}
                     </div>
                     <div style={{ fontWeight: 500, marginBottom: 4 }}>
                       {device.name}
@@ -132,11 +133,11 @@ export const Dashboard: React.FC = () => {
                       padding: '2px 8px',
                       borderRadius: 4,
                       fontSize: 12,
-                      backgroundColor: device.status === DeviceStatus.ONLINE ? '#f6ffed' : '#fff1f0',
-                      color: device.status === DeviceStatus.ONLINE ? '#52c41a' : '#ff4d4f',
-                      border: `1px solid ${device.status === DeviceStatus.ONLINE ? '#b7eb8f' : '#ffccc7'}`
+                      backgroundColor: device.status === DeviceStatus.Online ? '#f6ffed' : '#fff1f0',
+                      color: device.status === DeviceStatus.Online ? '#52c41a' : '#ff4d4f',
+                      border: `1px solid ${device.status === DeviceStatus.Online ? '#b7eb8f' : '#ffccc7'}`
                     }}>
-                      {device.status === DeviceStatus.ONLINE ? '在线' : '离线'}
+                      {device.status === DeviceStatus.Online ? '在线' : '离线'}
                     </div>
                   </Card>
                 </Col>
