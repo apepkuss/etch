@@ -40,6 +40,12 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Skip auth in test mode
+    if std::env::var("RUST_ENV").unwrap_or_default() == "test" {
+        info!("Test mode enabled - bypassing authentication");
+        return Ok(next.run(req).await);
+    }
+
     // 检查 Authorization header
     let auth_header = req
         .headers()

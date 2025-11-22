@@ -5,14 +5,19 @@ use axum::{
     routing::{get, post, delete},
     Router,
 };
-use echo_shared::{ApiResponse, Session, PaginationParams, PaginatedResponse, generate_session_id, now_utc, EchoKitConfig, EchoKitSession, EchoKitSessionStatus};
+use echo_shared::{
+    ApiResponse, Session, PaginationParams, PaginatedResponse,
+    generate_session_id, now_utc, EchoKitConfig, EchoKitSession, EchoKitSessionStatus
+};
 use echo_shared::types::SessionStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
 use crate::app_state::AppState;
+use chrono::{DateTime, Utc};
+use sqlx::Row;
 
 #[derive(Debug, Deserialize)]
 pub struct SessionQueryParams {
@@ -36,52 +41,8 @@ pub struct EndSessionRequest {
     pub reason: Option<String>,
 }
 
-// 模拟会话数据存储
-static mut SESSIONS: Option<Vec<Session>> = None;
+// 用于存储活跃的 EchoKit 会话（实时会话管理）
 static mut ECHOKIT_SESSIONS: Option<HashMap<String, EchoKitSession>> = None;
-
-fn get_mock_sessions() -> &'static mut Vec<Session> {
-    unsafe {
-        if SESSIONS.is_none() {
-            SESSIONS = Some(vec![
-                Session {
-                    id: "sess001".to_string(),
-                    device_id: "dev001".to_string(),
-                    user_id: "user001".to_string(),
-                    start_time: now_utc(),
-                    end_time: Some(now_utc()),
-                    duration: Some(120),
-                    transcription: Some("今天天气怎么样".to_string()),
-                    response: Some("今天天气晴朗，温度25摄氏度，适合外出活动。".to_string()),
-                    status: SessionStatus::Completed,
-                },
-                Session {
-                    id: "sess002".to_string(),
-                    device_id: "dev002".to_string(),
-                    user_id: "user001".to_string(),
-                    start_time: now_utc(),
-                    end_time: None,
-                    duration: None,
-                    transcription: Some("播放一些音乐".to_string()),
-                    response: None,
-                    status: SessionStatus::Active,
-                },
-                Session {
-                    id: "sess003".to_string(),
-                    device_id: "dev003".to_string(),
-                    user_id: "user001".to_string(),
-                    start_time: now_utc(),
-                    end_time: Some(now_utc()),
-                    duration: Some(30),
-                    transcription: Some("设置闹钟".to_string()),
-                    response: Some("好的，已为您设置闹钟。".to_string()),
-                    status: SessionStatus::Completed,
-                },
-            ]);
-        }
-        SESSIONS.as_mut().unwrap()
-    }
-}
 
 fn get_echokit_sessions() -> &'static mut HashMap<String, EchoKitSession> {
     unsafe {
@@ -143,9 +104,13 @@ async fn call_bridge_service_end_session(
     Ok(())
 }
 
-// 获取会话列表
+// ========================================================================
+// 历史会话查询（从数据库读取）
+// ========================================================================
+
+/// 获取会话列表（支持过滤、分页）
 pub async fn get_sessions(
-    State(_app_state): State<AppState>,
+    State(app_state): State<AppState>,
     Query(params): Query<SessionQueryParams>,
 ) -> Json<ApiResponse<PaginatedResponse<Session>>> {
     let pagination = PaginationParams {
@@ -153,54 +118,193 @@ pub async fn get_sessions(
         page_size: params.page_size.unwrap_or(20),
     };
 
-    let sessions = get_mock_sessions();
+    // 构建 SQL 查询条件（使用 SQL 转义避免注入）
+    let mut conditions = Vec::new();
 
-    // 应用过滤条件
-    let mut filtered_sessions: Vec<Session> = sessions.clone();
-
-    if let Some(device_id) = params.device_id {
-        filtered_sessions.retain(|s| s.device_id == device_id);
+    if let Some(device_id) = &params.device_id {
+        // 使用 PostgreSQL 的 quote_literal 风格转义
+        let escaped = device_id.replace("'", "''");
+        conditions.push(format!("device_id = '{}'", escaped));
     }
 
-    if let Some(status) = params.status {
-        filtered_sessions.retain(|s| s.status == status);
+    if let Some(status) = &params.status {
+        let status_str = match status {
+            SessionStatus::Active => "active",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Failed => "failed",
+            SessionStatus::Timeout => "timeout",
+        };
+        conditions.push(format!("status = '{}'", status_str));
     }
 
-    // TODO: 实现日期范围过滤
+    if let Some(start_date) = &params.start_date {
+        // 解析 ISO 8601 格式的日期
+        if let Ok(start_time) = start_date.parse::<DateTime<Utc>>() {
+            conditions.push(format!("start_time >= '{}'", start_time.to_rfc3339()));
+        }
+    }
 
-    // 按开始时间倒序排列
-    filtered_sessions.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    if let Some(end_date) = &params.end_date {
+        if let Ok(end_time) = end_date.parse::<DateTime<Utc>>() {
+            conditions.push(format!("start_time <= '{}'", end_time.to_rfc3339()));
+        }
+    }
 
-    // 应用分页
-    let total = filtered_sessions.len() as u64;
-    let offset = echo_shared::calculate_offset(pagination.page, pagination.page_size) as usize;
-    let end = (offset + pagination.page_size as usize).min(filtered_sessions.len());
-
-    let paginated_sessions = if offset < filtered_sessions.len() {
-        filtered_sessions[offset..end].to_vec()
+    let where_clause = if conditions.is_empty() {
+        String::new()
     } else {
-        vec![]
+        format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let response = PaginatedResponse::new(paginated_sessions, total, pagination);
+    // 查询总数
+    let count_query = format!("SELECT COUNT(*) as count FROM sessions {}", where_clause);
+
+    let total: i64 = match sqlx::query(&count_query)
+        .fetch_one(app_state.database.pool())
+        .await
+    {
+        Ok(row) => row.get("count"),
+        Err(e) => {
+            error!("Failed to count sessions: {}", e);
+            return Json(ApiResponse::error(format!("Database query failed: {}", e)));
+        }
+    };
+
+    // 查询分页数据
+    let offset = echo_shared::calculate_offset(pagination.page, pagination.page_size);
+    let limit = pagination.page_size;
+
+    let data_query = format!(
+        "SELECT id, device_id, user_id, start_time, end_time, duration, transcription, response, status
+         FROM sessions
+         {}
+         ORDER BY start_time DESC
+         LIMIT {} OFFSET {}",
+        where_clause, limit, offset
+    );
+
+    let sessions: Vec<Session> = match sqlx::query(&data_query)
+        .fetch_all(app_state.database.pool())
+        .await
+    {
+        Ok(rows) => {
+            rows.into_iter().map(|row| Session {
+                id: row.get("id"),
+                device_id: row.get("device_id"),
+                user_id: row.get("user_id"),
+                start_time: row.get("start_time"),
+                end_time: row.get("end_time"),
+                duration: row.get("duration"),
+                transcription: row.get("transcription"),
+                response: row.get("response"),
+                status: match row.get::<&str, _>("status") {
+                    "active" => SessionStatus::Active,
+                    "completed" => SessionStatus::Completed,
+                    "failed" => SessionStatus::Failed,
+                    "timeout" => SessionStatus::Timeout,
+                    _ => SessionStatus::Failed,
+                },
+            }).collect()
+        }
+        Err(e) => {
+            error!("Failed to query sessions: {}", e);
+            return Json(ApiResponse::error(format!("Database query failed: {}", e)));
+        }
+    };
+
+    let response = PaginatedResponse::new(sessions, total as u64, pagination);
     Json(ApiResponse::success(response))
 }
 
-// 获取单个会话详情
+/// 获取单个会话详情
 pub async fn get_session(
     Path(session_id): Path<String>,
-    State(_app_state): State<AppState>,
+    State(app_state): State<AppState>,
 ) -> Result<Json<ApiResponse<Session>>, StatusCode> {
-    let sessions = get_mock_sessions();
+    let query = "SELECT id, device_id, user_id, start_time, end_time, duration, transcription, response, status
+                 FROM sessions
+                 WHERE id = $1";
 
-    if let Some(session) = sessions.iter().find(|s| s.id == session_id) {
-        Ok(Json(ApiResponse::success(session.clone())))
-    } else {
-        Err(StatusCode::NOT_FOUND)
+    match sqlx::query(query)
+        .bind(&session_id)
+        .fetch_one(app_state.database.pool())
+        .await
+    {
+        Ok(row) => {
+            let session = Session {
+                id: row.get("id"),
+                device_id: row.get("device_id"),
+                user_id: row.get("user_id"),
+                start_time: row.get("start_time"),
+                end_time: row.get("end_time"),
+                duration: row.get("duration"),
+                transcription: row.get("transcription"),
+                response: row.get("response"),
+                status: match row.get::<&str, _>("status") {
+                    "active" => SessionStatus::Active,
+                    "completed" => SessionStatus::Completed,
+                    "failed" => SessionStatus::Failed,
+                    "timeout" => SessionStatus::Timeout,
+                    _ => SessionStatus::Failed,
+                },
+            };
+            Ok(Json(ApiResponse::success(session)))
+        }
+        Err(e) => {
+            error!("Failed to find session {}: {}", session_id, e);
+            Err(StatusCode::NOT_FOUND)
+        }
     }
 }
 
-// 创建新会话
+/// 获取会话统计信息（从数据库聚合查询）
+pub async fn get_session_stats(
+    State(app_state): State<AppState>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let query = r#"
+        SELECT
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE status = 'active') as active,
+            COUNT(*) FILTER (WHERE status = 'completed') as completed,
+            COUNT(*) FILTER (WHERE status = 'failed') as failed,
+            COUNT(*) FILTER (WHERE status = 'timeout') as timeout,
+            CAST(AVG(duration) FILTER (WHERE status = 'completed') AS DOUBLE PRECISION) as avg_duration,
+            COUNT(*) FILTER (WHERE DATE(start_time) = CURRENT_DATE) as today_sessions
+        FROM sessions
+    "#;
+
+    match sqlx::query(query)
+        .fetch_one(app_state.database.pool())
+        .await
+    {
+        Ok(row) => {
+            let avg_duration_f64: Option<f64> = row.get("avg_duration");
+            let avg_duration = avg_duration_f64.map(|d| d.round() as i32).unwrap_or(0);
+
+            let stats = json!({
+                "total": row.get::<i64, _>("total"),
+                "active": row.get::<i64, _>("active"),
+                "completed": row.get::<i64, _>("completed"),
+                "failed": row.get::<i64, _>("failed"),
+                "timeout": row.get::<i64, _>("timeout"),
+                "average_duration_seconds": avg_duration,
+                "today_sessions": row.get::<i64, _>("today_sessions")
+            });
+
+            Json(ApiResponse::success(stats))
+        }
+        Err(e) => {
+            error!("Failed to get session stats: {}", e);
+            Json(ApiResponse::error(format!("Database query failed: {}", e)))
+        }
+    }
+}
+
+// ========================================================================
+// 实时会话管理（创建、结束会话）
+// ========================================================================
+
+/// 创建新会话
 pub async fn create_session(
     State(_app_state): State<AppState>,
     Json(payload): Json<CreateSessionRequest>,
@@ -242,22 +346,6 @@ pub async fn create_session(
             let echokit_sessions = get_echokit_sessions();
             echokit_sessions.insert(echokit_session.id.clone(), echokit_session.clone());
 
-            // 同时创建传统会话记录用于兼容性
-            let traditional_session = Session {
-                id: echokit_session.id.clone(),
-                device_id: echokit_session.device_id.clone(),
-                user_id: echokit_session.user_id.clone(),
-                start_time: echokit_session.start_time,
-                end_time: None,
-                duration: None,
-                transcription: None,
-                response: None,
-                status: SessionStatus::Active,
-            };
-
-            let sessions = get_mock_sessions();
-            sessions.push(traditional_session);
-
             info!("Created new EchoKit session {} for device {}",
                   echokit_session.id, echokit_session.device_id);
 
@@ -272,48 +360,17 @@ pub async fn create_session(
     }
 }
 
-// 更新会话状态
+/// 更新会话状态（暂不实现，由 Bridge 直接写数据库）
 pub async fn update_session(
-    Path(session_id): Path<String>,
+    Path(_session_id): Path<String>,
     State(_app_state): State<AppState>,
-    Json(payload): Json<serde_json::Value>,
+    Json(_payload): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<Session>>, StatusCode> {
-    let sessions = get_mock_sessions();
-
-    if let Some(session) = sessions.iter_mut().find(|s| s.id == session_id) {
-        // 更新会话信息
-        if let Some(transcription) = payload.get("transcription").and_then(|v| v.as_str()) {
-            session.transcription = Some(transcription.to_string());
-        }
-        if let Some(response) = payload.get("response").and_then(|v| v.as_str()) {
-            session.response = Some(response.to_string());
-        }
-        if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
-            session.status = match status {
-                "active" => SessionStatus::Active,
-                "completed" => SessionStatus::Completed,
-                "failed" => SessionStatus::Failed,
-                "timeout" => SessionStatus::Timeout,
-                _ => session.status.clone(),
-            };
-        }
-
-        // 如果会话完成，更新结束时间和持续时间
-        if session.status == SessionStatus::Completed && session.end_time.is_none() {
-            session.end_time = Some(now_utc());
-            if let Some(end_time) = session.end_time {
-                let duration = end_time.signed_duration_since(session.start_time);
-                session.duration = Some(duration.num_seconds() as i32);
-            }
-        }
-
-        Ok(Json(ApiResponse::success(session.clone())))
-    } else {
-        Err(StatusCode::NOT_FOUND)
-    }
+    warn!("update_session is deprecated - sessions are now managed directly by Bridge service");
+    Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-// 结束会话 (EchoKit 版本)
+/// 结束会话 (EchoKit 版本)
 pub async fn end_session(
     Path(session_id): Path<String>,
     State(_app_state): State<AppState>,
@@ -339,17 +396,6 @@ pub async fn end_session(
                 let echokit_sessions = get_echokit_sessions();
                 echokit_sessions.insert(session_id.clone(), session.clone());
 
-                // 同时更新传统会话记录
-                let sessions = get_mock_sessions();
-                if let Some(traditional_session) = sessions.iter_mut().find(|s| s.id == session_id) {
-                    traditional_session.status = SessionStatus::Completed;
-                    traditional_session.end_time = Some(now_utc());
-                    if let Some(end_time) = traditional_session.end_time {
-                        let duration = end_time.signed_duration_since(traditional_session.start_time);
-                        traditional_session.duration = Some(duration.num_seconds() as i32);
-                    }
-                }
-
                 info!("Ended EchoKit session {} (reason: {})", session_id, reason);
 
                 let response = ApiResponse::success(());
@@ -367,66 +413,35 @@ pub async fn end_session(
     }
 }
 
-// 删除会话
+/// 删除会话（不建议使用，保留数据用于审计）
 pub async fn delete_session(
     Path(session_id): Path<String>,
-    State(_app_state): State<AppState>,
+    State(app_state): State<AppState>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let sessions = get_mock_sessions();
-    let original_len = sessions.len();
+    let query = "DELETE FROM sessions WHERE id = $1";
 
-    sessions.retain(|s| s.id != session_id);
-
-    if sessions.len() < original_len {
-        let response = json!({
-            "message": "Session deleted successfully",
-            "session_id": session_id
-        });
-        Json(ApiResponse::success(response))
-    } else {
-        Json(ApiResponse::error("Session not found".to_string()))
+    match sqlx::query(query)
+        .bind(&session_id)
+        .execute(app_state.database.pool())
+        .await
+    {
+        Ok(result) => {
+            let rows_affected = result.rows_affected();
+            if rows_affected > 0 {
+                let response = json!({
+                    "message": "Session deleted successfully",
+                    "session_id": session_id
+                });
+                Json(ApiResponse::success(response))
+            } else {
+                Json(ApiResponse::error("Session not found".to_string()))
+            }
+        }
+        Err(e) => {
+            error!("Failed to delete session {}: {}", session_id, e);
+            Json(ApiResponse::error(format!("Database error: {}", e)))
+        }
     }
-}
-
-// 获取会话统计信息
-pub async fn get_session_stats(
-    State(_app_state): State<AppState>,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let sessions = get_mock_sessions();
-
-    let total = sessions.len();
-    let active = sessions.iter().filter(|s| s.status == SessionStatus::Active).count();
-    let completed = sessions.iter().filter(|s| s.status == SessionStatus::Completed).count();
-    let failed = sessions.iter().filter(|s| s.status == SessionStatus::Failed).count();
-    let timeout = sessions.iter().filter(|s| s.status == SessionStatus::Timeout).count();
-
-    // 计算平均持续时间
-    let completed_sessions: Vec<_> = sessions.iter()
-        .filter(|s| s.status == SessionStatus::Completed && s.duration.is_some())
-        .collect();
-
-    let avg_duration = if !completed_sessions.is_empty() {
-        let total_duration: i32 = completed_sessions.iter()
-            .map(|s| s.duration.unwrap())
-            .sum();
-        total_duration / completed_sessions.len() as i32
-    } else {
-        0
-    };
-
-    let stats = json!({
-        "total": total,
-        "active": active,
-        "completed": completed,
-        "failed": failed,
-        "timeout": timeout,
-        "average_duration_seconds": avg_duration,
-        "today_sessions": sessions.iter().filter(|s| {
-            s.start_time.date_naive() == now_utc().date_naive()
-        }).count()
-    });
-
-    Json(ApiResponse::success(stats))
 }
 
 pub fn session_routes() -> Router<AppState> {

@@ -115,7 +115,7 @@ impl Database {
 impl Database {
     /// 获取所有设备
     pub async fn get_all_devices(&self) -> Result<Vec<echo_shared::Device>> {
-        let rows = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner FROM devices ORDER BY created_at DESC")
+        let rows = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner, echokit_server_url FROM devices ORDER BY created_at DESC")
         .fetch_all(&self.pool)
         .await?;
 
@@ -150,13 +150,14 @@ impl Database {
                 last_seen: row.get::<Option<DateTime<Utc>>, _>("last_seen").unwrap_or_else(chrono::Utc::now),
                 is_online: row.get::<Option<bool>, _>("is_online").unwrap_or(false),
                 owner: row.get::<Option<String>, _>("owner").unwrap_or_default(),
+                echokit_server_url: row.get::<Option<String>, _>("echokit_server_url"),
             }
         }).collect())
     }
 
     /// 根据ID获取设备
     pub async fn get_device_by_id(&self, device_id: &str) -> Result<Option<echo_shared::Device>> {
-        let device = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner FROM devices WHERE id = $1")
+        let device = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner, echokit_server_url FROM devices WHERE id = $1")
             .bind(device_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -192,6 +193,7 @@ impl Database {
                 last_seen: row.get::<Option<DateTime<Utc>>, _>("last_seen").unwrap_or_else(chrono::Utc::now),
                 is_online: row.get::<Option<bool>, _>("is_online").unwrap_or(false),
                 owner: row.get::<Option<String>, _>("owner").unwrap_or_default(),
+                echokit_server_url: row.get::<Option<String>, _>("echokit_server_url"),
             }
         }))
     }
@@ -259,6 +261,7 @@ impl Database {
             last_seen: result.get::<Option<DateTime<Utc>>, _>("last_seen").unwrap_or_else(chrono::Utc::now),
             is_online: result.get::<Option<bool>, _>("is_online").unwrap_or(false),
             owner: result.get::<Option<String>, _>("owner").unwrap_or_default(),
+            echokit_server_url: None,
         })
     }
 
@@ -271,7 +274,7 @@ impl Database {
         pairing_code: Option<&str>,
         registration_token: Option<&str>,
     ) -> Result<echo_shared::Device> {
-        let result = sqlx::query("INSERT INTO devices (id, name, device_type, status, firmware_version, battery_level, volume_level, last_seen, is_online, owner, pairing_code, registration_token, serial_number, mac_address, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()) RETURNING id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner")
+        let result = sqlx::query("INSERT INTO devices (id, name, device_type, status, firmware_version, battery_level, volume_level, last_seen, is_online, owner, pairing_code, registration_token, serial_number, mac_address, echokit_server_url, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW()) RETURNING id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner, echokit_server_url")
             .bind(&device.id)
             .bind(device.name.clone())
             .bind("speaker") // 暂时硬编码
@@ -286,6 +289,7 @@ impl Database {
             .bind(registration_token)
             .bind(serial_number)
             .bind(mac_address)
+            .bind(device.echokit_server_url.as_deref())
             .fetch_one(&self.pool)
             .await?;
 
@@ -301,6 +305,7 @@ impl Database {
             last_seen: result.get::<Option<DateTime<Utc>>, _>("last_seen").unwrap_or_else(chrono::Utc::now),
             is_online: result.get::<Option<bool>, _>("is_online").unwrap_or(false),
             owner: result.get::<Option<String>, _>("owner").unwrap_or_default(),
+            echokit_server_url: result.get::<Option<String>, _>("echokit_server_url"),
         })
     }
 
@@ -315,7 +320,64 @@ impl Database {
         Ok(())
     }
 
-    
+    /// 更新设备的EchoKit服务器URL
+    pub async fn update_device_echokit_server(
+        &self,
+        device_id: &str,
+        owner_id: &str,
+        echokit_server_url: Option<&str>,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE devices SET echokit_server_url = $1, updated_at = NOW() WHERE id = $2 AND owner = $3"
+        )
+            .bind(echokit_server_url)
+            .bind(device_id)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新设备名称
+    pub async fn update_device_name(
+        &self,
+        device_id: &str,
+        owner_id: &str,
+        name: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE devices SET name = $1, updated_at = NOW() WHERE id = $2 AND owner = $3"
+        )
+            .bind(name)
+            .bind(device_id)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新设备位置
+    pub async fn update_device_location(
+        &self,
+        device_id: &str,
+        owner_id: &str,
+        location: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE devices SET location = $1, updated_at = NOW() WHERE id = $2 AND owner = $3"
+        )
+            .bind(location)
+            .bind(device_id)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+
     /// 检查序列号是否已存在
     pub async fn check_serial_number_exists(&self, serial_number: &str) -> Result<bool> {
         let exists: Option<bool> = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE serial_number = $1)")
@@ -361,7 +423,7 @@ impl Database {
 
     /// 根据配对码获取设备信息
     pub async fn get_device_by_pairing_code(&self, pairing_code: &str) -> Result<Option<echo_shared::Device>> {
-        let device = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner FROM devices WHERE pairing_code = $1")
+        let device = sqlx::query("SELECT id, name, device_type, status, firmware_version, battery_level, volume_level as volume, last_seen, is_online, owner, echokit_server_url FROM devices WHERE pairing_code = $1")
             .bind(pairing_code)
             .fetch_optional(&self.pool)
             .await?;
@@ -379,6 +441,7 @@ impl Database {
                 last_seen: row.get::<Option<DateTime<Utc>>, _>("last_seen").unwrap_or_else(chrono::Utc::now),
                 is_online: row.get::<Option<bool>, _>("is_online").unwrap_or(false),
                 owner: row.get::<Option<String>, _>("owner").unwrap_or_default(),
+                echokit_server_url: row.get::<Option<String>, _>("echokit_server_url"),
             }
         }))
     }

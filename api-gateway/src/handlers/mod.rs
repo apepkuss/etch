@@ -4,3 +4,4 @@ pub mod devices;
 pub mod sessions;
 pub mod health;
 pub mod users;
+pub mod echokit_servers;

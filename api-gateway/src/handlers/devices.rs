@@ -25,6 +25,7 @@ pub struct UpdateDeviceRequest {
     pub name: Option<String>,
     pub location: Option<String>,
     pub config: Option<DeviceConfig>,
+    pub echokit_server_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +122,7 @@ pub async fn create_device(
         last_seen: now_utc(),
         is_online: false,
         owner: "user001".to_string(), // TODO: 从认证信息中获取
+        echokit_server_url: None,
     };
 
     match app_state.database.create_device(
@@ -147,13 +149,51 @@ pub async fn update_device(
     // 获取现有设备信息
     match app_state.database.get_device_by_id(&device_id).await {
         Ok(Some(mut device)) => {
-            // 更新设备信息
-            if let Some(name) = payload.name {
-                device.name = name;
+            // TODO: 从认证信息中获取真实的 owner_id
+            let owner_id = &device.owner;
+
+            // 更新设备名称
+            if let Some(ref name) = payload.name {
+                match app_state.database.update_device_name(&device_id, owner_id, name).await {
+                    Ok(true) => device.name = name.clone(),
+                    Ok(false) => return Err(StatusCode::NOT_FOUND),
+                    Err(e) => {
+                        error!("Failed to update device name: {}", e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
+                }
             }
-            if let Some(location) = payload.location {
-                device.location = location;
+
+            // 更新设备位置
+            if let Some(ref location) = payload.location {
+                match app_state.database.update_device_location(&device_id, owner_id, location).await {
+                    Ok(true) => device.location = location.clone(),
+                    Ok(false) => return Err(StatusCode::NOT_FOUND),
+                    Err(e) => {
+                        error!("Failed to update device location: {}", e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
+                }
             }
+
+            // 更新 EchoKit Server URL
+            if payload.echokit_server_url.is_some() {
+                let url_ref = payload.echokit_server_url.as_deref();
+                match app_state.database.update_device_echokit_server(
+                    &device_id,
+                    owner_id,
+                    url_ref
+                ).await {
+                    Ok(true) => device.echokit_server_url = payload.echokit_server_url.clone(),
+                    Ok(false) => return Err(StatusCode::NOT_FOUND),
+                    Err(e) => {
+                        error!("Failed to update device echokit_server_url: {}", e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
+                }
+            }
+
+            // 更新配置信息（音量和电池电量）
             if let Some(config) = payload.config {
                 if let Some(volume) = config.volume {
                     device.volume = volume;
@@ -164,9 +204,6 @@ pub async fn update_device(
             }
             device.last_seen = now_utc();
 
-            // TODO: 实现数据库更新操作
-            // let updated_device = app_state.database.update_device(&device).await?;
-            // 暂时返回更新后的设备信息
             Ok(Json(ApiResponse::success(device)))
         }
         Ok(None) => Err(StatusCode::NOT_FOUND),
@@ -379,6 +416,7 @@ pub async fn register_device(
         last_seen: now_utc(),
         is_online: false,
         owner: "user001".to_string(), // TODO: 从认证信息中获取
+        echokit_server_url: payload.echokit_server_url.clone(),
     };
 
     // 创建设备和注册令牌

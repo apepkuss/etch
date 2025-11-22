@@ -35,6 +35,7 @@ use handlers::auth::auth_routes;
 use handlers::devices::device_routes;
 use handlers::users::user_routes;
 use handlers::sessions::session_routes;
+use handlers::echokit_servers::echokit_server_routes;
 use app_state::AppState;
 use middleware::{auth_middleware, request_logging};
 use websocket::websocket_handler;
@@ -143,6 +144,7 @@ async fn main() -> Result<()> {
         .nest("/devices", device_routes())
         .nest("/users", user_routes())
         .nest("/sessions", session_routes())
+        .nest("/echokit-servers", echokit_server_routes())
         .layer(axum::middleware::from_fn(auth_middleware));
 
     let app = Router::new()
