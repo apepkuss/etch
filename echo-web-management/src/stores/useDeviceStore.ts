@@ -17,6 +17,7 @@ interface DeviceStore {
   // 操作
   fetchDevices: () => Promise<void>;
   selectDevice: (device: Device | null) => void;
+  updateDevice: (deviceId: string, updates: Partial<Device>) => Promise<void>;
   updateDeviceConfig: (deviceId: string, config: Partial<DeviceConfig>) => Promise<void>;
   restartDevice: (deviceId: string) => Promise<void>;
   deleteDevice: (deviceId: string) => Promise<void>;
@@ -65,6 +66,51 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   // 选择设备
   selectDevice: (device: Device | null) => {
     set({ selectedDevice: device });
+  },
+
+  // 更新设备
+  updateDevice: async (deviceId: string, updates: Partial<Device>) => {
+    try {
+      console.log('[useDeviceStore] updateDevice called:', {
+        deviceId,
+        updates,
+        'updates.echokit_server_url': updates.echokit_server_url
+      });
+
+      const updatedDevice = await devicesApi.updateDevice(deviceId, updates);
+
+      console.log('[useDeviceStore] API response:', {
+        'updatedDevice.id': updatedDevice.id,
+        'updatedDevice.echokit_server_url': updatedDevice.echokit_server_url,
+        'updatedDevice.name': updatedDevice.name
+      });
+
+      set(state => {
+        const newDevices = state.devices.map(device =>
+          device.id === deviceId ? { ...device, ...updatedDevice } : device
+        );
+
+        const updatedDeviceInState = newDevices.find(d => d.id === deviceId);
+        console.log('[useDeviceStore] After state update:', {
+          'updatedDeviceInState.echokit_server_url': updatedDeviceInState?.echokit_server_url
+        });
+
+        return {
+          devices: newDevices,
+          selectedDevice: state.selectedDevice?.id === deviceId
+            ? { ...state.selectedDevice, ...updatedDevice }
+            : state.selectedDevice
+        };
+      });
+
+      console.log('[useDeviceStore] State updated successfully');
+    } catch (error) {
+      console.error('Failed to update device:', error);
+      set({
+        error: error instanceof Error ? error.message : 'Failed to update device'
+      });
+      throw error;
+    }
   },
 
   // 更新设备配置

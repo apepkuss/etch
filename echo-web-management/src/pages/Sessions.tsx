@@ -34,9 +34,44 @@ import { useSessionStore } from '../stores/useSessionStore';
 import { useDeviceStore } from '../stores/useDeviceStore';
 import { Session, SessionStatus, Device, DeviceType } from '../types';
 import type { ColumnsType } from 'antd/es/table';
+import { Resizable, ResizeCallbackData } from 'react-resizable';
+import 'react-resizable/css/styles.css';
 import dayjs from 'dayjs';
 
 const { RangePicker } = DatePicker;
+
+// 可调整大小的表格列头组件
+interface ResizableTitleProps extends React.HTMLAttributes<HTMLElement> {
+  onResize?: (e: React.SyntheticEvent, data: ResizeCallbackData) => void;
+  width?: number;
+}
+
+const ResizableTitle: React.FC<ResizableTitleProps> = (props) => {
+  const { onResize, width, ...restProps } = props;
+
+  if (!width) {
+    return <th {...restProps} />;
+  }
+
+  return (
+    <Resizable
+      width={width}
+      height={0}
+      handle={
+        <span
+          className="react-resizable-handle"
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+        />
+      }
+      onResize={onResize}
+      draggableOpts={{ enableUserSelectHack: false }}
+    >
+      <th {...restProps} />
+    </Resizable>
+  );
+};
 
 export const Sessions: React.FC = () => {
   const {
@@ -60,6 +95,18 @@ export const Sessions: React.FC = () => {
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+
+  // 列宽状态
+  const [columnWidths, setColumnWidths] = useState({
+    id: 120,
+    device: 200,
+    status: 100,
+    start_time: 150,
+    end_time: 150,
+    duration: 100,
+    transcription: 200,
+    actions: 150
+  });
 
   useEffect(() => {
     fetchSessions();
@@ -182,22 +229,42 @@ export const Sessions: React.FC = () => {
     setIsModalVisible(true);
   };
 
+  // 处理列宽调整
+  const handleResize = (key: string) => (_: React.SyntheticEvent, { size }: ResizeCallbackData) => {
+    setColumnWidths((prev) => ({
+      ...prev,
+      [key]: size.width
+    }));
+  };
+
   // 表格列定义
   const columns: ColumnsType<Session> = [
     {
       title: '会话ID',
       dataIndex: 'id',
       key: 'id',
-      width: 120,
+      width: columnWidths.id,
+      ellipsis: true,
+      onHeaderCell: () => ({
+        width: columnWidths.id,
+        onResize: handleResize('id')
+      }),
       render: (id: string) => (
-        <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>
-          {id.slice(0, 8)}...
-        </span>
+        <Tooltip title={id}>
+          <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+            {id}
+          </span>
+        </Tooltip>
       )
     },
     {
       title: '设备',
       key: 'device',
+      width: columnWidths.device,
+      onHeaderCell: () => ({
+        width: columnWidths.device,
+        onResize: handleResize('device')
+      }),
       render: (_, record) => (
         <Space>
           <Avatar
@@ -212,20 +279,14 @@ export const Sessions: React.FC = () => {
       )
     },
     {
-      title: '用户',
-      dataIndex: 'user_id',
-      key: 'user_id',
-      render: (userId: string) => (
-        <Space>
-          <Avatar icon={<UserOutlined />} size="small" />
-          <span>{userId}</span>
-        </Space>
-      )
-    },
-    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      width: columnWidths.status,
+      onHeaderCell: () => ({
+        width: columnWidths.status,
+        onResize: handleResize('status')
+      }),
       render: (status: SessionStatus) => (
         <Tag color={getStatusColor(status)} icon={getStatusIcon(status)}>
           {getStatusText(status)}
@@ -236,6 +297,11 @@ export const Sessions: React.FC = () => {
       title: '开始时间',
       dataIndex: 'start_time',
       key: 'start_time',
+      width: columnWidths.start_time,
+      onHeaderCell: () => ({
+        width: columnWidths.start_time,
+        onResize: handleResize('start_time')
+      }),
       render: (time: string) => (
         <Tooltip title={new Date(time).toLocaleString()}>
           {dayjs(time).format('MM-DD HH:mm')}
@@ -246,6 +312,11 @@ export const Sessions: React.FC = () => {
       title: '结束时间',
       dataIndex: 'end_time',
       key: 'end_time',
+      width: columnWidths.end_time,
+      onHeaderCell: () => ({
+        width: columnWidths.end_time,
+        onResize: handleResize('end_time')
+      }),
       render: (time: string | null) => (
         time ? (
           <Tooltip title={new Date(time).toLocaleString()}>
@@ -258,19 +329,30 @@ export const Sessions: React.FC = () => {
       title: '时长',
       dataIndex: 'duration',
       key: 'duration',
+      width: columnWidths.duration,
+      onHeaderCell: () => ({
+        width: columnWidths.duration,
+        onResize: handleResize('duration')
+      }),
       render: (duration: number | null) => formatDuration(duration || 0)
     },
     {
       title: '语音内容',
       dataIndex: 'transcription',
       key: 'transcription',
-      width: 200,
+      width: columnWidths.transcription,
+      onHeaderCell: () => ({
+        width: columnWidths.transcription,
+        onResize: handleResize('transcription')
+      }),
       ellipsis: true,
       render: (text: string) => text || '-'
     },
     {
       title: '操作',
       key: 'actions',
+      width: columnWidths.actions,
+      fixed: 'right',
       render: (_, record) => (
         <Space>
           <Button
@@ -409,6 +491,11 @@ export const Sessions: React.FC = () => {
           dataSource={filteredSessions}
           rowKey="id"
           loading={loading}
+          components={{
+            header: {
+              cell: ResizableTitle
+            }
+          }}
           pagination={{
             total: filteredSessions.length,
             pageSize: 10,

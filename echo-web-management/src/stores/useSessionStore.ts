@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Session, SessionStatus } from '../types';
+import { Session } from '../types';
 import { sessionsApi } from '../api';
 import { websocketService } from '../api/websocket';
 
@@ -29,7 +29,7 @@ interface SessionStore {
 }
 
 // 创建会话 store
-export const useSessionStore = create<SessionStore>((set, get) => ({
+export const useSessionStore = create<SessionStore>((set) => ({
   // 初始状态
   sessions: [],
   activeSessions: [],
@@ -173,10 +173,10 @@ websocketService.connect({
   onMessage: (message) => {
     // 处理会话进度更新
     if (message.SessionProgress) {
-      const { session_id, stage, progress, message: progressMessage } = message.SessionProgress;
+      const { session_id, progress, message: progressMessage } = message.SessionProgress;
 
       // 更新会话进度信息
-      get().updateSession(session_id, {
+      useSessionStore.getState().updateSession(session_id, {
         // 这里可以添加进度相关的字段
         // 例如：progress: progress, currentStage: stage, progressMessage
       });

@@ -11,6 +11,7 @@ export interface Device {
   last_seen: string;
   is_online: boolean;
   owner: string;
+  echokit_server_url?: string;
 }
 
 export const DeviceType = {

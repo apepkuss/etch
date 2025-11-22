@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { ApiResponse, Session } from '../types';
+import { ApiResponse, Session, PaginatedResponse } from '../types';
 
 export interface SessionStats {
   total: number;
@@ -17,8 +17,8 @@ export const sessionsApi = {
   // 获取会话列表
   async getSessions(): Promise<Session[]> {
     try {
-      const response = await apiClient.get<ApiResponse<Session[]>>('/sessions');
-      return response.data.data;
+      const response = await apiClient.get<ApiResponse<PaginatedResponse<Session>>>('/sessions');
+      return response.data.data.items;
     } catch (error) {
       console.error('Failed to fetch sessions:', error);
       throw error;
@@ -85,11 +85,11 @@ export const sessionsApi = {
   },
 
   // 完成会话
-  async completeSession(sessionId: string, transcription: string, response: string): Promise<Session> {
+  async completeSession(sessionId: string, transcription: string, responseText: string): Promise<Session> {
     try {
       const response = await apiClient.post<ApiResponse<Session>>(`/sessions/${sessionId}/complete`, {
         transcription,
-        response,
+        response: responseText,
       });
       return response.data.data;
     } catch (error) {

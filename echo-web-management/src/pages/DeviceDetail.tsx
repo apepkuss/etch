@@ -12,30 +12,26 @@ import {
   Tabs,
   Form,
   Input,
-  Select,
   Slider,
   message,
   Spin,
   Alert,
   Timeline,
-  Statistic
+  Statistic,
+  Select
 } from 'antd';
 import {
   ArrowLeftOutlined,
-  SettingOutlined,
   ReloadOutlined,
   PlayCircleOutlined,
-  PauseCircleOutlined,
   WifiOutlined,
-  BatteryOutlined,
+  ThunderboltOutlined,
   AudioOutlined,
-  DesktopOutlined,
-  ControlOutlined,
   HistoryOutlined
 } from '@ant-design/icons';
 import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
-import { Device, DeviceStatus, DeviceType, Session } from '../types';
+import { DeviceStatus, DeviceType, SessionStatus } from '../types';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 const { TabPane } = Tabs;
@@ -43,7 +39,7 @@ const { TabPane } = Tabs;
 export const DeviceDetail: React.FC = () => {
   const { deviceId } = useParams<{ deviceId: string }>();
   const navigate = useNavigate();
-  const { devices, selectedDevice, selectDevice, updateDeviceConfig, restartDevice } = useDeviceStore();
+  const { devices, selectDevice, updateDeviceConfig, restartDevice } = useDeviceStore();
   const { sessions, fetchSessions } = useSessionStore();
   const { sendDeviceCommand, isConnected } = useWebSocket();
 
@@ -56,7 +52,7 @@ export const DeviceDetail: React.FC = () => {
   useEffect(() => {
     if (device) {
       selectDevice(device);
-      fetchSessions(device.id);
+      fetchSessions();
       form.setFieldsValue({
         volume: device.volume,
         location: device.location
@@ -67,10 +63,10 @@ export const DeviceDetail: React.FC = () => {
   // 获取状态颜色
   const getStatusColor = (status: DeviceStatus) => {
     switch (status) {
-      case DeviceStatus.ONLINE: return 'success';
-      case DeviceStatus.OFFLINE: return 'default';
-      case DeviceStatus.ERROR: return 'error';
-      case DeviceStatus.MAINTENANCE: return 'warning';
+      case DeviceStatus.Online: return 'success';
+      case DeviceStatus.Offline: return 'default';
+      case DeviceStatus.Error: return 'error';
+      case DeviceStatus.Maintenance: return 'warning';
       default: return 'default';
     }
   };
@@ -78,22 +74,21 @@ export const DeviceDetail: React.FC = () => {
   // 获取状态文本
   const getStatusText = (status: DeviceStatus) => {
     switch (status) {
-      case DeviceStatus.ONLINE: return '在线';
-      case DeviceStatus.OFFLINE: return '离线';
-      case DeviceStatus.ERROR: return '故障';
-      case DeviceStatus.MAINTENANCE: return '维护中';
+      case DeviceStatus.Online: return '在线';
+      case DeviceStatus.Offline: return '离线';
+      case DeviceStatus.Error: return '故障';
+      case DeviceStatus.Maintenance: return '维护中';
+      case DeviceStatus.Pending: return '待注册';
       default: return '未知';
     }
   };
 
   // 获取设备类型图标
   const getDeviceTypeIcon = (type: DeviceType) => {
-    switch (type) {
-      case DeviceType.SPEAKER: return <AudioOutlined />;
-      case DeviceType.DISPLAY: return <DesktopOutlined />;
-      case DeviceType.HUB: return <ControlOutlined />;
-      default: return <AudioOutlined />;
+    if (type === DeviceType.Speaker) {
+      return <AudioOutlined />;
     }
+    return <AudioOutlined />;
   };
 
   // 处理配置更新
@@ -131,7 +126,7 @@ export const DeviceDetail: React.FC = () => {
   };
 
   // 获取设备会话
-  const deviceSessions = sessions.filter(session => session.deviceId === deviceId);
+  const deviceSessions = sessions.filter(session => session.device_id === deviceId);
 
   if (!device) {
     return (
@@ -156,7 +151,7 @@ export const DeviceDetail: React.FC = () => {
             </Button>
             <div>
               <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                {getDeviceTypeIcon(device.type)}
+                {getDeviceTypeIcon(device.device_type)}
                 {device.name}
               </h2>
               <p style={{ margin: 0, color: '#8c8c8c' }}>
@@ -171,14 +166,14 @@ export const DeviceDetail: React.FC = () => {
             <Button
               icon={<ReloadOutlined />}
               onClick={handleRestartDevice}
-              disabled={device.status === DeviceStatus.MAINTENANCE}
+              disabled={device.status === DeviceStatus.Maintenance}
             >
               重启设备
             </Button>
             <Button
               icon={<PlayCircleOutlined />}
               onClick={handleVoiceTest}
-              disabled={!isConnected || device.status !== DeviceStatus.ONLINE}
+              disabled={!isConnected || device.status !== DeviceStatus.Online}
             >
               语音测试
             </Button>
@@ -208,11 +203,10 @@ export const DeviceDetail: React.FC = () => {
                   <Descriptions.Item label="设备ID">{device.id}</Descriptions.Item>
                   <Descriptions.Item label="设备名称">{device.name}</Descriptions.Item>
                   <Descriptions.Item label="设备类型">
-                    {device.type === DeviceType.SPEAKER ? '智能音箱' :
-                     device.type === DeviceType.DISPLAY ? '智能显示屏' : '中控设备'}
+                    {device.device_type === DeviceType.Speaker ? '智能音箱' : '其他设备'}
                   </Descriptions.Item>
                   <Descriptions.Item label="设备位置">{device.location}</Descriptions.Item>
-                  <Descriptions.Item label="固件版本">{device.firmwareVersion}</Descriptions.Item>
+                  <Descriptions.Item label="固件版本">{device.firmware_version}</Descriptions.Item>
                   <Descriptions.Item label="设备所有者">{device.owner}</Descriptions.Item>
                 </Descriptions>
               </Card>
@@ -224,16 +218,16 @@ export const DeviceDetail: React.FC = () => {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
                       <span>电池电量</span>
-                      {device.batteryLevel && (
+                      {device.battery_level && (
                         <span>
-                          <BatteryOutlined /> {device.batteryLevel}%
+                          <ThunderboltOutlined /> {device.battery_level}%
                         </span>
                       )}
                     </div>
-                    {device.batteryLevel && (
+                    {device.battery_level && (
                       <Progress
-                        percent={device.batteryLevel}
-                        strokeColor={device.batteryLevel > 20 ? '#52c41a' : '#ff4d4f'}
+                        percent={device.battery_level}
+                        strokeColor={device.battery_level > 20 ? '#52c41a' : '#ff4d4f'}
                         showInfo={false}
                       />
                     )}
@@ -249,7 +243,7 @@ export const DeviceDetail: React.FC = () => {
 
                   <Statistic
                     title="最后在线时间"
-                    value={new Date(device.lastSeen).toLocaleString()}
+                    value={new Date(device.last_seen).toLocaleString()}
                     prefix={<WifiOutlined />}
                   />
                 </Space>
@@ -360,11 +354,11 @@ export const DeviceDetail: React.FC = () => {
               {deviceSessions.map((session) => (
                 <Timeline.Item
                   key={session.id}
-                  color={session.status === 'active' ? 'green' : 'blue'}
+                  color={session.status === SessionStatus.Active ? 'green' : 'blue'}
                 >
                   <div>
                     <div style={{ fontWeight: 500 }}>
-                      {new Date(session.startTime).toLocaleString()}
+                      {new Date(session.start_time).toLocaleString()}
                     </div>
                     <div style={{ marginTop: 4 }}>
                       <span style={{ color: '#1890ff' }}>用户：</span>

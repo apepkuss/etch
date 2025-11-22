@@ -29,6 +29,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import DeviceRegistrationModal from '../components/DeviceRegistrationModal';
 import useDeviceStore from '../stores/useDeviceStore';
+import useEchoKitServerStore from '../stores/useEchoKitServerStore';
 import type { ColumnsType } from 'antd/es/table';
 import { Device, DeviceStatus, DeviceType } from '../types';
 
@@ -40,6 +41,10 @@ const DeviceList: React.FC = () => {
   const [isRegistrationModalVisible, setIsRegistrationModalVisible] = useState(false);
   const [form] = Form.useForm();
 
+  // 跟踪正在编辑 EchoKit Server 的设备
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [tempServerUrl, setTempServerUrl] = useState<string | undefined>(undefined);
+
   // 使用设备存储
   const {
     devices,
@@ -47,14 +52,22 @@ const DeviceList: React.FC = () => {
     error,
     fetchDevices,
     deleteDevice: deleteDeviceFromStore,
+    updateDevice,
     fetchDeviceStats
   } = useDeviceStore();
+
+  // 使用 EchoKit Server 存储
+  const {
+    servers: echokitServers,
+    fetchServers: fetchEchokitServers
+  } = useEchoKitServerStore();
 
   // 组件挂载时获取设备数据
   useEffect(() => {
     fetchDevices();
     fetchDeviceStats();
-  }, [fetchDevices, fetchDeviceStats]);
+    fetchEchokitServers();
+  }, [fetchDevices, fetchDeviceStats, fetchEchokitServers]);
 
   // 错误处理
   useEffect(() => {
@@ -84,6 +97,40 @@ const DeviceList: React.FC = () => {
     } catch (error) {
       console.error('Failed to refresh devices after registration:', error);
     }
+  };
+
+  // 保存 EchoKit Server URL 更新
+  const handleSaveServerUrl = async (deviceId: string) => {
+    try {
+      const beforeDevice = devices.find(d => d.id === deviceId);
+      console.log('[DeviceList] Before save:', {
+        deviceId,
+        tempServerUrl,
+        'beforeDevice.echokit_server_url': beforeDevice?.echokit_server_url
+      });
+
+      await updateDevice(deviceId, { echokit_server_url: tempServerUrl });
+
+      // 注意：这里读取的 devices 可能还是旧的，因为 React 状态更新是异步的
+      const afterDevice = devices.find(d => d.id === deviceId);
+      console.log('[DeviceList] After save (may be stale):', {
+        'afterDevice.echokit_server_url': afterDevice?.echokit_server_url
+      });
+
+      message.success('EchoKit 服务器已更新');
+      setEditingDeviceId(null);
+      setTempServerUrl(undefined);
+      // updateDevice 已经更新了本地状态，不需要重新 fetchDevices
+    } catch (error) {
+      message.error('更新 EchoKit 服务器失败');
+      console.error('Failed to update echokit server:', error);
+    }
+  };
+
+  // 取消 EchoKit Server URL 更新
+  const handleCancelServerUrl = () => {
+    setEditingDeviceId(null);
+    setTempServerUrl(undefined);
   };
 
   // 获取状态标签
@@ -160,6 +207,54 @@ const DeviceList: React.FC = () => {
           format={percent => `${percent}%`}
         />
       ),
+    },
+    {
+      title: 'EchoKit 服务器',
+      dataIndex: 'echokit_server_url',
+      key: 'echokit_server_url',
+      align: 'center',
+      render: (url: string | undefined, record: Device) => {
+        const isEditing = editingDeviceId === record.id;
+        const displayValue = isEditing ? tempServerUrl : url;
+
+        return (
+          <Space>
+            <Select
+              style={{ width: 200 }}
+              placeholder="选择 EchoKit 服务器"
+              value={displayValue}
+              onChange={(value) => {
+                setEditingDeviceId(record.id);
+                setTempServerUrl(value);
+              }}
+              allowClear
+            >
+              {echokitServers.map((server) => (
+                <Select.Option key={server.id} value={server.server_url}>
+                  {server.server_url}
+                </Select.Option>
+              ))}
+            </Select>
+            {isEditing && (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => handleSaveServerUrl(record.id)}
+                >
+                  保存
+                </Button>
+                <Button
+                  size="small"
+                  onClick={handleCancelServerUrl}
+                >
+                  取消
+                </Button>
+              </>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: '操作',

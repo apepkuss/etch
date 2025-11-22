@@ -2,8 +2,9 @@ import { ConfigProvider, Button, Card, Input, Form, Layout, Menu, Avatar, Row, C
 import zhCN from 'antd/locale/zh_CN';
 import { UserOutlined, LockOutlined, DashboardOutlined, AudioOutlined, HistoryOutlined, SettingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, WifiOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useState } from 'react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import DeviceList from './pages/DeviceList';
+import { DeviceDetail } from './pages/DeviceDetail';
 import { Dashboard } from './pages/Dashboard';
 import { Sessions } from './pages/Sessions';
 import { Settings } from './pages/Settings';
@@ -132,43 +133,191 @@ const LoginPage = ({ onLogin }: { onLogin: () => void }) => {
 };
 
 
-// 主应用组件
-function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+// 主布局组件（带路由感知的菜单）
+const MainLayout = ({ onLogout }: { onLogout: () => void }) => {
   const [collapsed, setCollapsed] = useState(false);
-  const [selectedMenu, setSelectedMenu] = useState('dashboard');
-
-  // 获取设备store和会话store的数据
+  const navigate = useNavigate();
+  const location = useLocation();
   const { stats: deviceStats } = useDeviceStore();
-  const { stats: sessionStats } = useSessionStore();
 
   // 菜单配置
   const menuItems = [
     {
-      key: 'dashboard',
+      key: '/',
       icon: <DashboardOutlined />,
       label: '仪表板'
     },
     {
-      key: 'devices',
+      key: '/devices',
       icon: <AudioOutlined />,
       label: '设备管理'
     },
     {
-      key: 'sessions',
+      key: '/sessions',
       icon: <HistoryOutlined />,
       label: '会话记录'
     },
     {
-      key: 'settings',
+      key: '/settings',
       icon: <SettingOutlined />,
       label: '系统设置'
     }
   ];
 
+  // 从当前路径确定选中的菜单项
+  const selectedKey = location.pathname.startsWith('/devices')
+    ? '/devices'
+    : location.pathname.startsWith('/sessions')
+    ? '/sessions'
+    : location.pathname.startsWith('/settings')
+    ? '/settings'
+    : '/';
+
   const handleMenuClick = ({ key }: { key: string }) => {
-    setSelectedMenu(key);
+    navigate(key);
   };
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      {/* 侧边栏 */}
+      <Sider
+        trigger={null}
+        collapsible
+        collapsed={collapsed}
+        style={{
+          background: '#fff',
+          boxShadow: '2px 0 8px rgba(0,0,0,0.15)'
+        }}
+      >
+        {/* Logo */}
+        <div
+          style={{
+            height: 64,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            padding: collapsed ? 0 : '0 24px',
+            borderBottom: '1px solid #f0f0f0'
+          }}
+        >
+          {collapsed ? (
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                background: '#1890ff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontWeight: 'bold'
+              }}
+            >
+              E
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 'bold', color: '#1890ff' }}>
+                Echo Web
+              </div>
+              <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+                智能音箱管理平台
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 菜单 */}
+        <Menu
+          mode="inline"
+          selectedKeys={[selectedKey]}
+          items={menuItems}
+          onClick={handleMenuClick}
+          style={{ border: 'none' }}
+        />
+      </Sider>
+
+      <Layout>
+        {/* 顶部导航 */}
+        <Header
+          style={{
+            padding: '0 16px',
+            background: '#fff',
+            borderBottom: '1px solid #f0f0f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}
+        >
+          {/* 左侧：折叠按钮 */}
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button
+              type="text"
+              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => setCollapsed(!collapsed)}
+              style={{
+                fontSize: '16px',
+                width: 64,
+                height: 64
+              }}
+            />
+          </div>
+
+          {/* 右侧：用户信息 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <span style={{ fontSize: 14, color: '#1890ff' }}>
+              在线设备: {deviceStats.online || 0}
+            </span>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderRadius: 6
+              }}
+            >
+              <Avatar size="small" icon={<UserOutlined />} />
+              <span style={{ fontSize: 14 }}>管理员</span>
+              <Button
+                type="link"
+                size="small"
+                onClick={onLogout}
+              >
+                退出
+              </Button>
+            </div>
+          </div>
+        </Header>
+
+        {/* 主内容区域 - 使用 Routes */}
+        <Content
+          style={{
+            margin: 0,
+            background: '#f5f5f5',
+            minHeight: 'calc(100vh - 64px)',
+            overflow: 'auto'
+          }}
+        >
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/devices" element={<DeviceList />} />
+            <Route path="/devices/:deviceId" element={<DeviceDetail />} />
+            <Route path="/sessions" element={<Sessions />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Content>
+      </Layout>
+    </Layout>
+  );
+};
+
+// 主应用组件
+function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // 如果未登录，显示登录页面
   if (!isLoggedIn) {
@@ -182,151 +331,10 @@ function App() {
   }
 
   // 已登录，显示管理界面
-  const renderContent = () => {
-    switch (selectedMenu) {
-      case 'dashboard':
-        return <Dashboard />;
-      case 'devices':
-        return <DeviceList />;
-      case 'sessions':
-        return <Sessions />;
-      case 'settings':
-        return <Settings />;
-      default:
-        return <Dashboard />;
-    }
-  };
-
   return (
     <BrowserRouter>
       <ConfigProvider locale={zhCN}>
-        <Layout style={{ minHeight: '100vh' }}>
-          {/* 侧边栏 */}
-          <Sider
-            trigger={null}
-            collapsible
-            collapsed={collapsed}
-            style={{
-              background: '#fff',
-              boxShadow: '2px 0 8px rgba(0,0,0,0.15)'
-            }}
-          >
-            {/* Logo */}
-            <div
-              style={{
-                height: 64,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: collapsed ? 'center' : 'flex-start',
-                padding: collapsed ? 0 : '0 24px',
-                borderBottom: '1px solid #f0f0f0'
-              }}
-            >
-              {collapsed ? (
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    background: '#1890ff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'white',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  E
-                </div>
-              ) : (
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 'bold', color: '#1890ff' }}>
-                    Echo Web
-                  </div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c' }}>
-                    智能音箱管理平台
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 菜单 */}
-            <Menu
-              mode="inline"
-              selectedKeys={[selectedMenu]}
-              items={menuItems}
-              onClick={handleMenuClick}
-              style={{ border: 'none' }}
-            />
-          </Sider>
-
-          <Layout>
-            {/* 顶部导航 */}
-            <Header
-              style={{
-                padding: '0 16px',
-                background: '#fff',
-                borderBottom: '1px solid #f0f0f0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
-              }}
-            >
-              {/* 左侧：折叠按钮 */}
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <Button
-                  type="text"
-                  icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                  onClick={() => setCollapsed(!collapsed)}
-                  style={{
-                    fontSize: '16px',
-                    width: 64,
-                    height: 64
-                  }}
-                />
-              </div>
-
-              {/* 右侧：用户信息 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span style={{ fontSize: 14, color: '#1890ff' }}>
-                  在线设备: {deviceStats.online || 0}
-                </span>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    cursor: 'pointer',
-                    padding: '4px 8px',
-                    borderRadius: 6
-                  }}
-                >
-                  <Avatar size="small" icon={<UserOutlined />} />
-                  <span style={{ fontSize: 14 }}>管理员</span>
-                  <Button
-                    type="link"
-                    size="small"
-                    onClick={() => setIsLoggedIn(false)}
-                  >
-                    退出
-                  </Button>
-                </div>
-              </div>
-            </Header>
-
-            {/* 主内容区域 */}
-            <Content
-              style={{
-                margin: 0,
-                background: '#f5f5f5',
-                minHeight: 'calc(100vh - 64px)',
-                overflow: 'auto'
-              }}
-            >
-              {renderContent()}
-            </Content>
-          </Layout>
-        </Layout>
+        <MainLayout onLogout={() => setIsLoggedIn(false)} />
       </ConfigProvider>
     </BrowserRouter>
   );

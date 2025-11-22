@@ -28,6 +28,7 @@ import {
   RollbackOutlined,
 } from '@ant-design/icons';
 import { devicesApi } from '../api/devices';
+import { echokitServersApi, EchoKitServer } from '../api/echokitServers';
 import {
   DeviceRegistrationRequest,
   DeviceRegistrationResponse,
@@ -55,6 +56,8 @@ const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = ({
   const [registrationStatus, setRegistrationStatus] = useState<'active' | 'success' | 'failed' | 'expired'>('active');
   const [createdDeviceInfo, setCreatedDeviceInfo] = useState<any>(null); // 新增：存储创建的设备信息
   const [registrationMethod, setRegistrationMethod] = useState<'scan' | 'manual'>('scan'); // 新增：注册方式选择
+  const [echokitServers, setEchokitServers] = useState<EchoKitServer[]>([]); // EchoKit 服务器列表
+  const [loadingServers, setLoadingServers] = useState(false); // 加载服务器列表状态
   const [form] = Form.useForm();
 
   // 重置所有状态的函数
@@ -69,12 +72,35 @@ const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = ({
     form.resetFields();
   }, [form]);
 
-  // 当 modal 关闭时重置状态
+  // 加载 EchoKit 服务器列表
+  const loadEchokitServers = useCallback(async () => {
+    setLoadingServers(true);
+    try {
+      const servers = await echokitServersApi.getServers();
+      setEchokitServers(servers);
+    } catch (error) {
+      console.error('Failed to load EchoKit servers:', error);
+      message.error('加载 EchoKit 服务器列表失败');
+    } finally {
+      setLoadingServers(false);
+    }
+  }, []);
+
+  // 当 modal 打开时加载服务器列表，关闭时重置状态
   useEffect(() => {
-    if (!visible) {
+    if (visible) {
+      loadEchokitServers();
+    } else {
       resetModalState();
     }
-  }, [visible, resetModalState]);
+  }, [visible, resetModalState, loadEchokitServers]);
+
+  // 当服务器列表加载完成后，设置默认选中第一个服务器
+  useEffect(() => {
+    if (echokitServers.length > 0 && !form.getFieldValue('echokit_server_url')) {
+      form.setFieldValue('echokit_server_url', echokitServers[0].server_url);
+    }
+  }, [echokitServers, form]);
 
   // 设备类型选项
   const deviceTypeOptions = [
@@ -358,6 +384,7 @@ const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = ({
       onFinish={handleFormSubmit}
       initialValues={{
         device_type: DeviceType.Speaker,
+        echokit_server_url: echokitServers.length > 0 ? echokitServers[0].server_url : undefined,
       }}
     >
       {/* 必填项 */}
@@ -441,6 +468,26 @@ const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = ({
           {deviceTypeOptions.map(option => (
             <Option key={option.value} value={option.value}>
               {option.label}
+            </Option>
+          ))}
+        </Select>
+      </Form.Item>
+
+      <Form.Item
+        name="echokit_server_url"
+        label="EchoKit 服务器"
+        rules={[
+          { required: true, message: '请选择 EchoKit 服务器' },
+        ]}
+      >
+        <Select
+          placeholder="选择 EchoKit 服务器"
+          loading={loadingServers}
+          notFoundContent={loadingServers ? <Spin size="small" /> : '暂无可用服务器'}
+        >
+          {echokitServers.map(server => (
+            <Option key={server.id} value={server.server_url}>
+              {server.server_url}
             </Option>
           ))}
         </Select>
