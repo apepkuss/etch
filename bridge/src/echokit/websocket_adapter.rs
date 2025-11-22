@@ -61,6 +61,16 @@ impl EchoKitSessionAdapter {
             bridge_session_id, device_id, echokit_session_id
         );
 
+        // 🔧 新增：确保 EchoKit 连接使用正确的 device_id
+        // 如果尚未连接或需要重新连接到不同的 device_id，则重新连接
+        if !self.echokit_client.is_connected().await {
+            info!("EchoKit not connected, connecting with device_id: {}", device_id);
+            self.echokit_client
+                .connect_with_device_id(Some(&device_id))
+                .await
+                .with_context(|| format!("Failed to connect to EchoKit with device_id: {}", device_id))?;
+        }
+
         // 🔑 关键修复：在调用 start_session 之前，立即在 active_sessions 中预注册
         // 这样可以确保当 EchoKit Server 返回 HelloChunk 时，转发循环能找到 session
         self.echokit_client

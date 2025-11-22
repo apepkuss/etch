@@ -51,35 +51,45 @@ pub async fn websocket_handler_with_id(
         .map(|v| v == "true")
         .unwrap_or(false);
 
+    // 🔧 从查询参数中提取自定义 device_id（如果提供）
+    let custom_device_id = params.get("device_id").map(|s| s.as_str());
+
     info!(
-        "Client {} connecting (record_mode: {})",
-        visitor_id, record_mode
+        "Client {} connecting (record_mode: {}, custom_device_id: {:?})",
+        visitor_id, record_mode, custom_device_id
     );
 
-    // 确保设备记录存在（自动创建如果不存在）
-    let device_uuid = match state
-        .session_service
-        .ensure_device_exists(&visitor_id, Some(&format!("WebUI-{}", &visitor_id[..8])))
-        .await
-    {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            error!("Failed to ensure device exists for {}: {}", visitor_id, e);
-            // 返回错误响应
-            return ws.on_upgrade(|mut socket| async move {
-                let _ = socket
-                    .send(Message::Text(format!("Error: Failed to register device: {}", e).into()))
-                    .await;
-                let _ = socket.close().await;
-            });
+    // 如果提供了自定义 device_id，直接使用（不验证是否存在于数据库）
+    let device_id = if let Some(custom_id) = custom_device_id {
+        info!("Using custom device_id: {}", custom_id);
+        custom_id.to_string()
+    } else {
+        // 否则，确保设备记录存在（自动创建如果不存在）
+        match state
+            .session_service
+            .ensure_device_exists(&visitor_id, Some(&format!("WebUI-{}", &visitor_id[..8])))
+            .await
+        {
+            Ok(uuid) => {
+                let device_id = uuid.to_string();
+                info!(
+                    "Device {} (visitor: {}) registered successfully",
+                    device_id, visitor_id
+                );
+                device_id
+            }
+            Err(e) => {
+                error!("Failed to ensure device exists for {}: {}", visitor_id, e);
+                // 返回错误响应
+                return ws.on_upgrade(|mut socket| async move {
+                    let _ = socket
+                        .send(Message::Text(format!("Error: Failed to register device: {}", e).into()))
+                        .await;
+                    let _ = socket.close().await;
+                });
+            }
         }
     };
-
-    let device_id = device_uuid.to_string();
-    info!(
-        "Device {} (visitor: {}) registered successfully",
-        device_id, visitor_id
-    );
 
     ws.on_upgrade(move |socket| {
         handle_device_websocket(socket, device_id, record_mode, state)

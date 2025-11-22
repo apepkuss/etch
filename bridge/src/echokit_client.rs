@@ -129,8 +129,21 @@ impl EchoKitClient {
 
     // 连接到 EchoKit Server
     pub async fn connect(&self) -> Result<()> {
-        let url = Url::parse(&self.websocket_url)
-            .with_context(|| format!("Invalid WebSocket URL: {}", self.websocket_url))?;
+        self.connect_with_device_id(None).await
+    }
+
+    /// 连接到 EchoKit Server，支持动态 device_id 替换
+    pub async fn connect_with_device_id(&self, device_id: Option<&str>) -> Result<()> {
+        // 如果提供了 device_id，则替换 URL 中的 {device_id} 占位符
+        let url_string = if let Some(id) = device_id {
+            self.websocket_url.replace("{device_id}", id)
+        } else {
+            // 如果没有提供 device_id，使用默认值 "ci-test-visitor"
+            self.websocket_url.replace("{device_id}", "ci-test-visitor")
+        };
+
+        let url = Url::parse(&url_string)
+            .with_context(|| format!("Invalid WebSocket URL: {}", url_string))?;
 
         info!("Connecting to EchoKit Server at: {}", url);
 

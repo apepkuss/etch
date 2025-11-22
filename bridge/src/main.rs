@@ -5,6 +5,8 @@ mod udp_server;
 mod mqtt_client;
 mod websocket;
 mod session_service;
+mod session;
+mod api_handlers;
 
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
@@ -38,7 +40,8 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             udp_bind_address: "0.0.0.0:8083".to_string(),
-            echokit_websocket_url: "wss://indie.echokit.dev/ws/bridge-test".to_string(),
+            // URL模板: {device_id} 将被实际的device_id替换
+            echokit_websocket_url: "wss://indie.echokit.dev/ws/{device_id}".to_string(),
             api_gateway_websocket_url: "ws://api-gateway:8080/ws".to_string(),
             max_sessions: 100,
             session_timeout_seconds: 300, // 5分钟
@@ -66,6 +69,7 @@ struct BridgeService {
     echokit_adapter: Arc<echokit::EchoKitSessionAdapter>,
     // 数据库持久化
     session_service: Arc<session_service::SessionService>,
+    db_session_manager: Arc<session::SessionManager>,
 }
 
 // 会话信息
@@ -110,8 +114,12 @@ async fn main() -> Result<()> {
     info!("Database connected successfully");
 
     // 创建 SessionService
-    let session_service = Arc::new(session_service::SessionService::new(Arc::new(db_pool)));
+    let session_service = Arc::new(session_service::SessionService::new(Arc::new(db_pool.clone())));
     info!("SessionService initialized");
+
+    // 创建数据库支持的 SessionManager
+    let db_session_manager = Arc::new(session::SessionManager::new(db_pool.clone()));
+    info!("Database-backed SessionManager initialized");
 
     // 创建设备音频输出通道
     let (audio_output_tx, audio_output_rx) = mpsc::unbounded_channel();
@@ -230,6 +238,7 @@ async fn main() -> Result<()> {
         flow_controller: flow_controller.clone(),
         echokit_adapter: echokit_adapter.clone(),
         session_service: session_service.clone(),
+        db_session_manager: db_session_manager.clone(),
     };
 
     // 启动 MQTT 事件循环
@@ -341,6 +350,16 @@ impl BridgeService {
             flow_controller.start().await;
         });
 
+        // 启动会话清理任务（每 5 分钟清理一次已完成的会话）
+        let db_session_manager = self.db_session_manager.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 5 minutes
+            loop {
+                interval.tick().await;
+                db_session_manager.cleanup_completed_sessions().await;
+            }
+        });
+
         // 启动健康检查服务
         self.start_health_check_service().await?;
 
@@ -421,11 +440,12 @@ impl BridgeService {
         let session_manager = self.session_manager.clone();
         let echokit_adapter = self.echokit_adapter.clone();
 
-        // 启动统一的 HTTP/WebSocket 服务器（健康检查、WebSocket、静态文件）
+        // 启动统一的 HTTP/WebSocket 服务器（健康检查、WebSocket、静态文件、API）
         let session_service_for_ws = self.session_service.clone();
+        let db_session_manager_for_api = self.db_session_manager.clone();
         tokio::spawn(async move {
             use axum::{
-                routing::get,
+                routing::{get, post},
                 Router,
             };
             use tower_http::services::ServeDir;
@@ -452,15 +472,27 @@ impl BridgeService {
                     session_service: session_service_for_ws,
                 });
 
+            // Session API 路由
+            let api_router = Router::new()
+                .route("/api/sessions", post(api_handlers::create_session))
+                .route("/api/sessions/{id}", get(api_handlers::get_session))
+                .route("/api/sessions/{id}/transcription", post(api_handlers::update_transcription))
+                .route("/api/sessions/{id}/complete", post(api_handlers::complete_session))
+                .with_state(api_handlers::ApiState {
+                    session_manager: db_session_manager_for_api,
+                });
+
             // 合并所有路由
             let app = Router::new()
                 .merge(health_router)
                 .merge(ws_router)
-                .fallback_service(ServeDir::new("resources"));
+                .merge(api_router)
+                .fallback_service(ServeDir::new("bridge/resources"));
 
             info!("HTTP/WebSocket server listening on: {}", bind_address);
             info!("  - Health check: http://{}/health", bind_address);
             info!("  - WebSocket: ws://{}/ws/audio", bind_address);
+            info!("  - Session API: http://{}/api/sessions", bind_address);
             info!("  - Static files: http://{}/bridge_webui.html", bind_address);
 
             let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();

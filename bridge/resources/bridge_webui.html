@@ -54,6 +54,24 @@
                 <button id="connectBtn" class="btn btn-primary">连接</button>
             </div>
 
+            <!-- 设备ID输入区域 -->
+            <div class="mb-6">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">模拟设备ID（可选）</span>
+                        <span class="label-text-alt text-xs text-base-content/60">留空则自动创建新设备</span>
+                    </label>
+                    <input type="text" id="deviceId"
+                           placeholder="例如: ECHO_ES20250101001_a1b2c3d4e5f6"
+                           class="input input-bordered w-full" />
+                    <label class="label">
+                        <span class="label-text-alt text-xs text-info">
+                            💡 提示：输入数据库中已存在的 device_id，可以模拟该设备进行语音交互测试
+                        </span>
+                    </label>
+                </div>
+            </div>
+
             <!-- 连接状态显示 -->
             <div id="connectionStatus" class="alert alert-info mb-4 hidden">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -175,6 +193,7 @@
                 this.connectionStatusText = document.getElementById('connectionStatusText');
                 this.debugModeCheckbox = document.getElementById('debugMode');
                 this.recordingModeCheckbox = document.getElementById('recordingMode'); // 录制模式勾选框
+                this.deviceIdInput = document.getElementById('deviceId'); // 设备ID输入框
             }
 
             bindEvents() {
@@ -265,12 +284,29 @@
                     return;
                 }
                 url = url.endsWith('/') ? url : url + '/';
+
+                // 🔧 检查是否有自定义设备ID
+                const customDeviceId = this.deviceIdInput.value.trim();
                 let id = window.visitorId || crypto.randomUUID();
                 url = url + id;
 
-                // 如果需要添加录制参数
+                // 构建查询参数
+                const queryParams = [];
+
+                // 添加录制模式参数
                 if (addRecordParam) {
-                    url = url + '?record=true';
+                    queryParams.push('record=true');
+                }
+
+                // 添加自定义设备ID参数
+                if (customDeviceId) {
+                    queryParams.push('device_id=' + encodeURIComponent(customDeviceId));
+                    this.addServerMessage('🎯 使用自定义设备ID: ' + customDeviceId);
+                }
+
+                // 拼接查询参数
+                if (queryParams.length > 0) {
+                    url = url + '?' + queryParams.join('&');
                 }
 
                 try {
