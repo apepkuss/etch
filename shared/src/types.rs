@@ -15,6 +15,8 @@ pub struct Device {
     pub last_seen: DateTime<Utc>,
     pub is_online: bool,
     pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echokit_server_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +85,7 @@ pub struct DeviceRegistrationRequest {
     pub device_type: DeviceType,
     pub serial_number: Option<String>,
     pub mac_address: Option<String>,
+    pub echokit_server_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,6 +35,7 @@ pub struct DeviceRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub config: serde_json::Value, // JSON配置存储
+    pub echokit_server_url: Option<String>,
 }
 
 // 会话表模型
