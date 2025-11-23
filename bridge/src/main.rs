@@ -268,7 +268,22 @@ async fn main() -> Result<()> {
     // 启动各个组件
     bridge_service.start(audio_output_rx).await?;
 
+    // 打印服务端口信息
+    let websocket_port = std::env::var("WEBSOCKET_PORT")
+        .unwrap_or_else(|_| "10031".to_string());
+
+    info!("========================================");
     info!("Echo Bridge Service started successfully!");
+    info!("========================================");
+    info!("UDP Audio Server:    {}", config.udp_bind_address);
+    info!("HTTP/WebSocket:      0.0.0.0:{}", websocket_port);
+    info!("  - Health check:    http://localhost:{}/health", websocket_port);
+    info!("  - WebSocket:       ws://localhost:{}/ws/audio", websocket_port);
+    info!("  - Session API:     http://localhost:{}/api/sessions", websocket_port);
+    info!("  - Web UI:          http://localhost:{}/bridge_webui.html", websocket_port);
+    info!("MQTT Broker:         {}:{}", config.mqtt_broker_host, config.mqtt_broker_port);
+    info!("EchoKit WebSocket:   {}", config.echokit_websocket_url);
+    info!("========================================");
 
     // 保持服务运行
     tokio::signal::ctrl_c().await?;
