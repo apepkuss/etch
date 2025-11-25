@@ -194,7 +194,7 @@ pub enum UserRole {
 pub struct Session {
     pub id: String,
     pub device_id: String,
-    pub user_id: String,
+    pub user_id: Option<String>, // 可以为 None（Bridge WebUI 没有用户认证）
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
     pub duration: Option<i32>,
