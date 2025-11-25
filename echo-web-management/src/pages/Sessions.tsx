@@ -22,6 +22,7 @@ import {
   SearchOutlined,
   ReloadOutlined,
   UserOutlined,
+  RobotOutlined,
   AudioOutlined,
   DesktopOutlined,
   ControlOutlined,
@@ -104,7 +105,7 @@ export const Sessions: React.FC = () => {
     start_time: 150,
     end_time: 150,
     duration: 100,
-    transcription: 200,
+    conversation_rounds: 120,
     actions: 150
   });
 
@@ -194,6 +195,12 @@ export const Sessions: React.FC = () => {
     const minutes = Math.floor(duration / 60);
     const seconds = duration % 60;
     return `${minutes}分${seconds}秒`;
+  };
+
+  // 计算对话轮数
+  const getConversationRounds = (transcription?: string | null) => {
+    if (!transcription) return 0;
+    return transcription.split('\n').filter(t => t.trim()).length;
   };
 
   // 刷新会话列表
@@ -337,16 +344,21 @@ export const Sessions: React.FC = () => {
       render: (duration: number | null) => formatDuration(duration || 0)
     },
     {
-      title: '语音内容',
-      dataIndex: 'transcription',
-      key: 'transcription',
-      width: columnWidths.transcription,
+      title: '对话轮数',
+      key: 'conversation_rounds',
+      width: columnWidths.conversation_rounds,
       onHeaderCell: () => ({
-        width: columnWidths.transcription,
-        onResize: handleResize('transcription')
+        width: columnWidths.conversation_rounds,
+        onResize: handleResize('conversation_rounds')
       }),
-      ellipsis: true,
-      render: (text: string) => text || '-'
+      render: (_, record) => {
+        const rounds = getConversationRounds(record.transcription);
+        return (
+          <Tooltip title={`${rounds} 轮对话`}>
+            <Tag color="blue">{rounds} 轮</Tag>
+          </Tooltip>
+        );
+      }
     },
     {
       title: '操作',
@@ -518,43 +530,109 @@ export const Sessions: React.FC = () => {
         width={600}
       >
         {selectedSession && (
-          <Descriptions column={1} bordered>
-            <Descriptions.Item label="会话ID">
-              <code>{selectedSession.id}</code>
-            </Descriptions.Item>
-            <Descriptions.Item label="设备">
-              <Space>
-                {getDeviceTypeIcon(selectedSession.device_id)}
-                {getDeviceName(selectedSession.device_id)}
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="用户">
-              <Space>
-                <Avatar icon={<UserOutlined />} size="small" />
-                {selectedSession.user_id}
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={getStatusColor(selectedSession.status)} icon={getStatusIcon(selectedSession.status)}>
-                {getStatusText(selectedSession.status)}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="开始时间">
-              {new Date(selectedSession.start_time).toLocaleString()}
-            </Descriptions.Item>
-            <Descriptions.Item label="结束时间">
-              {selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString() : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="时长">
-              {formatDuration(selectedSession.duration || 0)}
-            </Descriptions.Item>
-            <Descriptions.Item label="语音内容">
-              {selectedSession.transcription || '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="回复内容">
-              {selectedSession.response || '-'}
-            </Descriptions.Item>
-          </Descriptions>
+          <div>
+            {/* 基本信息卡片 */}
+            <Card style={{ marginBottom: 16 }}>
+              <Descriptions column={2} bordered size="small">
+                <Descriptions.Item label="会话ID" span={2}>
+                  <code style={{ fontSize: '12px' }}>{selectedSession.id}</code>
+                </Descriptions.Item>
+                <Descriptions.Item label="设备">
+                  <Space>
+                    {getDeviceTypeIcon(selectedSession.device_id)}
+                    {getDeviceName(selectedSession.device_id)}
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="状态">
+                  <Tag
+                    color={getStatusColor(selectedSession.status)}
+                    icon={getStatusIcon(selectedSession.status)}
+                  >
+                    {getStatusText(selectedSession.status)}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="开始时间">
+                  {new Date(selectedSession.start_time).toLocaleString()}
+                </Descriptions.Item>
+                <Descriptions.Item label="结束时间">
+                  {selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString() : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="时长">
+                  {formatDuration(selectedSession.duration || 0)}
+                </Descriptions.Item>
+                <Descriptions.Item label="对话轮数">
+                  <Tag color="blue">
+                    {getConversationRounds(selectedSession.transcription)} 轮
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            {/* 对话记录时间线 */}
+            {selectedSession.transcription || selectedSession.response ? (
+              <Card title="对话记录" size="small">
+                <Timeline>
+                  {(() => {
+                    const transcripts = selectedSession.transcription?.split('\n').filter(t => t.trim()) || [];
+                    const responses = selectedSession.response?.split('\n').filter(r => r.trim()) || [];
+                    const maxLength = Math.max(transcripts.length, responses.length);
+                    const items = [];
+
+                    for (let i = 0; i < maxLength; i++) {
+                      // 用户输入
+                      if (transcripts[i]) {
+                        items.push(
+                          <Timeline.Item
+                            key={`user-${i}`}
+                            color="blue"
+                            dot={<Avatar icon={<UserOutlined />} size="small" style={{ backgroundColor: '#1890ff' }} />}
+                          >
+                            <Card size="small" style={{ backgroundColor: '#e6f7ff', borderColor: '#91d5ff' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ fontWeight: 'bold', color: '#1890ff' }}>
+                                  用户 (第 {i + 1} 轮)
+                                </span>
+                                <span style={{ flex: 1 }}>{transcripts[i].trim()}</span>
+                              </div>
+                            </Card>
+                          </Timeline.Item>
+                        );
+                      }
+
+                      // AI 回复
+                      if (responses[i]) {
+                        items.push(
+                          <Timeline.Item
+                            key={`ai-${i}`}
+                            color="green"
+                            dot={<Avatar icon={<RobotOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />}
+                          >
+                            <Card size="small" style={{ backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ fontWeight: 'bold', color: '#52c41a' }}>
+                                  AI 助手
+                                </span>
+                                <span style={{ flex: 1 }}>{responses[i].trim()}</span>
+                              </div>
+                            </Card>
+                          </Timeline.Item>
+                        );
+                      }
+                    }
+
+                    return items;
+                  })()}
+                </Timeline>
+              </Card>
+            ) : (
+              <Card>
+                <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                  <AudioOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+                  <div>暂无对话记录</div>
+                </div>
+              </Card>
+            )}
+          </div>
         )}
       </Modal>
     </div>

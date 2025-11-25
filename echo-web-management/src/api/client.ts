@@ -22,7 +22,7 @@ apiClient.interceptors.request.use(
 
     // 临时解决方案：如果没有token，自动设置一个admin token用于演示
     if (!token) {
-      token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbi0wMDEiLCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6IkFkbWluIiwiZXhwIjoxNzYzNDc1NjM3LCJpYXQiOjE3NjMzODkyMzd9.FoofLi2-w3EqVrHgUTYy8ne14dpsYfeWOXyNdj3Oia8';
+      token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbi0wMDEiLCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6IkFkbWluIiwiZXhwIjoxNzY0MDY4NTUwLCJpYXQiOjE3NjM5ODIxNTB9.2af2aQQEfUzF4m5Z8N8EN5St8CnYvfRRx6TAQZlltHw';
       localStorage.setItem('authToken', token);
     }
 
