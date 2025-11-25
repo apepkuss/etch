@@ -32,7 +32,7 @@ impl SessionManager {
         let session = Session {
             id: Uuid::new_v4().to_string(),
             device_id: device_id.to_string(),
-            user_id: user_id.to_string(),
+            user_id: Some(user_id.to_string()), // 🔧 修复：user_id 现在是 Option<String>
             start_time: Utc::now(),
             end_time: None,
             duration: None,
@@ -290,7 +290,7 @@ impl From<SessionRecord> for Session {
         Session {
             id: record.id,
             device_id: record.device_id,
-            user_id: record.user_id.unwrap_or_default(),
+            user_id: record.user_id, // 🔧 修复：直接使用 Option<String>，不需要 unwrap
             start_time: record.start_time,
             end_time: record.end_time,
             duration: record.duration,

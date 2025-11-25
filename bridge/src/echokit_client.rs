@@ -25,6 +25,7 @@ pub struct EchoKitClient {
     active_sessions: Arc<RwLock<HashMap<String, String>>>, // session_id -> device_id
     audio_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, audio_data)
     asr_callback: Option<mpsc::UnboundedSender<(String, String)>>, // (session_id, asr_text)
+    response_callback: Option<mpsc::UnboundedSender<(String, String)>>, // (session_id, ai_response_text) - 也用于发送 EndResponse 标记
     raw_message_callback: Option<mpsc::UnboundedSender<(String, Vec<u8>)>>, // (session_id, raw_messagepack_data)
     cached_hello_messages: Arc<RwLock<Vec<Vec<u8>>>>, // 缓存 HelloChunk 消息，用于新会话
     pending_hello_sessions: Arc<RwLock<Vec<String>>>, // 等待发送缓存 Hello 的会话列表
@@ -45,6 +46,7 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: None,
             asr_callback: None,
+            response_callback: None,
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
@@ -69,6 +71,7 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
             asr_callback: None,
+            response_callback: None,
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
@@ -81,6 +84,7 @@ impl EchoKitClient {
         websocket_url: String,
         audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
         asr_callback: mpsc::UnboundedSender<(String, String)>,
+        response_callback: mpsc::UnboundedSender<(String, String)>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -94,6 +98,7 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
             asr_callback: Some(asr_callback),
+            response_callback: Some(response_callback),
             raw_message_callback: None,
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
@@ -101,11 +106,12 @@ impl EchoKitClient {
         }
     }
 
-    /// Create a new EchoKitClient with audio, ASR, and raw message callback support
+    /// Create a new EchoKitClient with audio, ASR, response, and raw message callback support
     pub fn new_with_all_callbacks(
         websocket_url: String,
         audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
         asr_callback: mpsc::UnboundedSender<(String, String)>,
+        response_callback: mpsc::UnboundedSender<(String, String)>,
         raw_message_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -120,6 +126,7 @@ impl EchoKitClient {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             audio_callback: Some(audio_callback),
             asr_callback: Some(asr_callback),
+            response_callback: Some(response_callback),
             raw_message_callback: Some(raw_message_callback),
             cached_hello_messages: Arc::new(RwLock::new(Vec::new())),
             pending_hello_sessions: Arc::new(RwLock::new(Vec::new())),
@@ -478,6 +485,7 @@ impl EchoKitClient {
         let active_sessions = self.active_sessions.clone();
         let audio_callback = self.audio_callback.clone();
         let asr_callback = self.asr_callback.clone();
+        let response_callback = self.response_callback.clone();
         let raw_message_callback = self.raw_message_callback.clone();
         let cached_hello_messages = self.cached_hello_messages.clone();
         let pending_hello_sessions = self.pending_hello_sessions.clone();
@@ -548,12 +556,13 @@ impl EchoKitClient {
                                             }
                                         }
 
-                                        // 额外处理ASR事件，用于日志记录和其他内部逻辑
+                                        // 额外处理ASR事件和AI回复事件，用于日志记录和其他内部逻辑
                                         if let Err(e) = Self::handle_messagepack_data(
                                             msgpack_value,
                                             &active_sessions,
                                             &audio_callback,
                                             &asr_callback,
+                                            &response_callback,
                                             &cached_hello_messages,
                                             &hello_caching_enabled,
                                         ).await {
@@ -769,24 +778,26 @@ impl EchoKitConnectionManager {
         }
     }
 
-    /// Create a new connection manager with both audio and ASR callback support
+    /// Create a new connection manager with audio, ASR, and response callback support
     pub fn new_with_callbacks(
         websocket_url: String,
         audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
         asr_callback: mpsc::UnboundedSender<(String, String)>,
+        response_callback: mpsc::UnboundedSender<(String, String)>,
     ) -> Self {
         Self {
-            client: Arc::new(EchoKitClient::new_with_callbacks(websocket_url, audio_callback, asr_callback)),
+            client: Arc::new(EchoKitClient::new_with_callbacks(websocket_url, audio_callback, asr_callback, response_callback)),
             reconnect_interval: tokio::time::Duration::from_secs(5),
             max_reconnect_attempts: 10,
         }
     }
 
-    /// Create a new connection manager with audio, ASR, and raw message callback support
+    /// Create a new connection manager with audio, ASR, response, and raw message callback support
     pub fn new_with_all_callbacks(
         websocket_url: String,
         audio_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
         asr_callback: mpsc::UnboundedSender<(String, String)>,
+        response_callback: mpsc::UnboundedSender<(String, String)>,
         raw_message_callback: mpsc::UnboundedSender<(String, Vec<u8>)>,
     ) -> Self {
         Self {
@@ -794,6 +805,7 @@ impl EchoKitConnectionManager {
                 websocket_url,
                 audio_callback,
                 asr_callback,
+                response_callback,
                 raw_message_callback
             )),
             reconnect_interval: tokio::time::Duration::from_secs(5),
@@ -881,6 +893,7 @@ impl EchoKitClient {
         active_sessions: &Arc<RwLock<HashMap<String, String>>>,
         audio_callback: &Option<mpsc::UnboundedSender<(String, Vec<u8>)>>,
         asr_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
+        response_callback: &Option<mpsc::UnboundedSender<(String, String)>>,
         cached_hello_messages: &Arc<RwLock<Vec<Vec<u8>>>>,
         hello_caching_enabled: &Arc<RwLock<bool>>,
     ) -> Result<()> {
@@ -979,6 +992,17 @@ impl EchoKitClient {
                                     info!("✅ Successfully forwarded {} event to session {}", event_str, session_id);
                                 }
                             }
+
+                            // 🔧 EndResponse 特殊处理：通知合并当前轮次的 AI 回复
+                            if event_str == "EndResponse" {
+                                if let Some(callback) = response_callback {
+                                    // 发送特殊标记，表示一轮对话结束，需要合并 AI 回复
+                                    info!("🔔 Sending EndResponse signal for session: {}", session_id);
+                                    if let Err(e) = callback.send((session_id.clone(), "__END_RESPONSE__".to_string())) {
+                                        error!("❌ Failed to send EndResponse signal for session {}: {}", session_id, e);
+                                    }
+                                }
+                            }
                         }
                     }
                     _ => {
@@ -995,16 +1019,26 @@ impl EchoKitClient {
 
                         match event_type.as_str() {
                             "ASR" => {
-                                // ASR事件：仅用于服务器端日志记录
-                                // 注意：ASR 数据已经通过 audio_callback 作为原始 MessagePack 转发给客户端
-                                // 这里不再重复转发，只记录日志用于服务器监控
+                                // ASR事件：提取文本并通过 asr_callback 发送
+                                // 注意：ASR 数据已经通过 audio_callback 作为原始 MessagePack 转发给客户端（用于 WebUI 显示）
+                                // 这里同时通过 asr_callback 发送给 websocket_adapter（用于保存到数据库）
                                 if let Value::Array(arr) = val {
                                     if let Some(Value::String(text_val)) = arr.first() {
                                         let asr_text = text_val.as_str().unwrap_or("");
                                         info!("📝 Received ASR from EchoKit: {}", asr_text);
 
-                                        // 仅用于内部监控和调试，不再转发
-                                        debug!("� ASR text for monitoring: {}", asr_text);
+                                        // 🔧 方案B：发送 ASR 文本到 asr_callback 通道，供 SessionManager 保存
+                                        if let Some(callback) = asr_callback {
+                                            // 发送到所有活跃会话（通常一个 EchoKit 连接对应一个会话）
+                                            let sessions = active_sessions.read().await;
+                                            for (session_id, _) in sessions.iter() {
+                                                if let Err(e) = callback.send((session_id.clone(), asr_text.to_string())) {
+                                                    error!("❌ Failed to send ASR to callback for session {}: {}", session_id, e);
+                                                } else {
+                                                    debug!("✅ ASR sent to callback for session {}", session_id);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1033,9 +1067,30 @@ impl EchoKitClient {
                                 }
                             }
                             "StartAudio" => {
-                                info!("🔊 Start audio event");
+                                // StartAudio事件：提取AI回复文本并通过 response_callback 发送
+                                // 注意：StartAudio 数据已经通过 audio_callback 作为原始 MessagePack 转发给客户端（用于 WebUI 显示）
+                                // 这里同时通过 response_callback 发送给 websocket_adapter（用于保存到数据库）
+                                if let Value::Array(arr) = val {
+                                    if let Some(Value::String(text_val)) = arr.first() {
+                                        let response_text = text_val.as_str().unwrap_or("");
+                                        info!("🤖 Received AI response from EchoKit: {}", response_text);
 
-                                // 转发 StartAudio 事件
+                                        // 🔧 方案B：发送 AI 回复文本到 response_callback 通道，供 SessionManager 保存
+                                        if let Some(callback) = response_callback {
+                                            // 发送到所有活跃会话（通常一个 EchoKit 连接对应一个会话）
+                                            let sessions = active_sessions.read().await;
+                                            for (session_id, _) in sessions.iter() {
+                                                if let Err(e) = callback.send((session_id.clone(), response_text.to_string())) {
+                                                    error!("❌ Failed to send AI response to callback for session {}: {}", session_id, e);
+                                                } else {
+                                                    debug!("✅ AI response sent to callback for session {}", session_id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 同时转发 StartAudio 事件（用于客户端显示）
                                 let event_json = serde_json::json!({
                                     "event": "StartAudio"
                                 }).to_string();

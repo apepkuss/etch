@@ -6,6 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::echokit_client::EchoKitClient;
 use crate::websocket::connection_manager::DeviceConnectionManager;
+use crate::websocket::session_manager::SessionManager;
 use crate::websocket::protocol::ServerEvent;
 use echo_shared::{AudioFormat, EchoKitConfig};
 
@@ -15,12 +16,16 @@ pub struct EchoKitSessionAdapter {
     echokit_client: Arc<EchoKitClient>,
     /// 设备连接管理器（用于发送音频到设备）
     connection_manager: Arc<DeviceConnectionManager>,
+    /// 🔧 会话管理器（用于保存 ASR 转录文本到内存）
+    session_manager: Arc<SessionManager>,
     /// Session 映射: bridge_session_id -> (device_id, echokit_session_id)
     session_mapping: Arc<RwLock<HashMap<String, (String, String)>>>,
     /// 音频接收通道
     audio_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, Vec<u8>)>>>>,
     /// ASR 接收通道
     asr_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, String)>>>>,
+    /// AI 回复接收通道
+    response_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, String)>>>>,
     /// 原始消息接收通道（用于直接转发 MessagePack 数据）
     raw_message_receiver: Arc<RwLock<Option<mpsc::UnboundedReceiver<(String, Vec<u8>)>>>>,
 }
@@ -30,16 +35,20 @@ impl EchoKitSessionAdapter {
     pub fn new(
         echokit_client: Arc<EchoKitClient>,
         connection_manager: Arc<DeviceConnectionManager>,
+        session_manager: Arc<SessionManager>,
         audio_receiver: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
         asr_receiver: mpsc::UnboundedReceiver<(String, String)>,
+        response_receiver: mpsc::UnboundedReceiver<(String, String)>,
         raw_message_receiver: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
     ) -> Self {
         Self {
             echokit_client,
             connection_manager,
+            session_manager,
             session_mapping: Arc::new(RwLock::new(HashMap::new())),
             audio_receiver: Arc::new(RwLock::new(Some(audio_receiver))),
             asr_receiver: Arc::new(RwLock::new(Some(asr_receiver))),
+            response_receiver: Arc::new(RwLock::new(Some(response_receiver))),
             raw_message_receiver: Arc::new(RwLock::new(Some(raw_message_receiver))),
         }
     }
@@ -367,6 +376,23 @@ impl EchoKitSessionAdapter {
             if let Some(device_id) = device_id {
                 info!("🎯 Found device {} for ASR, forwarding...", device_id);
 
+                // 🔧 方案B：先保存 ASR 文本到内存（找到对应的 bridge_session_id）
+                let bridge_session_id = {
+                    let mapping = self.session_mapping.read().await;
+                    mapping
+                        .iter()
+                        .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
+                        .map(|(bridge_id, _)| bridge_id.clone())
+                };
+
+                if let Some(bridge_session_id) = bridge_session_id {
+                    // 将 ASR 文本追加到会话的转录记录中
+                    self.session_manager.append_transcript(&bridge_session_id, asr_text.clone()).await;
+                    info!("💾 Saved ASR text to session {} memory", bridge_session_id);
+                } else {
+                    warn!("⚠️ Could not find bridge session for EchoKit session {}", echokit_session_id);
+                }
+
                 // 发送 ASR 事件到设备
                 match self
                     .connection_manager
@@ -400,6 +426,59 @@ impl EchoKitSessionAdapter {
         }
 
         info!("ASR receiver stopped");
+    }
+
+    /// 启动 AI 回复接收器（从 EchoKit 接收 AI 回复文本并保存到 SessionManager）
+    pub async fn start_response_receiver(self: Arc<Self>) {
+        info!("🤖 Starting EchoKit AI response receiver");
+
+        // 获取 AI 回复接收通道
+        let mut response_rx = {
+            let mut receiver_guard = self.response_receiver.write().await;
+            receiver_guard.take()
+        };
+
+        if response_rx.is_none() {
+            error!("❌ AI response receiver channel not available");
+            return;
+        }
+
+        let mut response_rx = response_rx.unwrap();
+        info!("✅ AI response receiver channel acquired, waiting for messages...");
+
+        // 持续监听 AI 回复数据
+        while let Some((echokit_session_id, response_text)) = response_rx.recv().await {
+            info!(
+                "🤖 Received AI response from EchoKit session {}: {}",
+                echokit_session_id, response_text
+            );
+
+            // 根据 echokit_session_id 找到对应的 bridge_session_id
+            let bridge_session_id = {
+                let mapping = self.session_mapping.read().await;
+                mapping
+                    .iter()
+                    .find(|(_, (_, ek_id))| ek_id == &echokit_session_id)
+                    .map(|(bridge_id, _)| bridge_id.clone())
+            };
+
+            if let Some(bridge_session_id) = bridge_session_id {
+                // 🔧 检测 EndResponse 特殊标记
+                if response_text == "__END_RESPONSE__" {
+                    // 收到 EndResponse 事件，合并当前轮次的 AI 回复
+                    info!("🔔 Received EndResponse signal for session {}, finalizing current round response", bridge_session_id);
+                    self.session_manager.finalize_current_round_response(&bridge_session_id).await;
+                } else {
+                    // 正常的 AI 回复片段，追加到当前轮次的回复记录中
+                    self.session_manager.append_response(&bridge_session_id, response_text.clone()).await;
+                    info!("💾 Saved AI response fragment to session {} memory", bridge_session_id);
+                }
+            } else {
+                warn!("⚠️ Could not find bridge session for EchoKit session {} (AI response)", echokit_session_id);
+            }
+        }
+
+        info!("AI response receiver stopped");
     }
 
     /// 启动原始消息接收器（直接转发 MessagePack 数据到设备）

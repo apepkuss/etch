@@ -14,7 +14,6 @@
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
 
-    <script src="https://openfpcdn.io/fingerprintjs/v5/iife.min.js"></script>
     <style>
         .recording-pulse {
             animation: pulse 1s ease-in-out infinite alternate;
@@ -54,19 +53,20 @@
                 <button id="connectBtn" class="btn btn-primary">连接</button>
             </div>
 
-            <!-- 设备ID输入区域 -->
+            <!-- 设备ID输入区域（必填）-->
             <div class="mb-6">
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">模拟设备ID（可选）</span>
-                        <span class="label-text-alt text-xs text-base-content/60">留空则自动创建新设备</span>
+                        <span class="label-text">设备 ID *</span>
+                        <span class="label-text-alt text-xs text-base-content/60">请输入在Echo Web注册的设备ID</span>
                     </label>
                     <input type="text" id="deviceId"
-                           placeholder="例如: ECHO_ES20250101001_a1b2c3d4e5f6"
-                           class="input input-bordered w-full" />
+                           placeholder="输入设备ID（必填）"
+                           class="input input-bordered w-full input-primary"
+                           required />
                     <label class="label">
                         <span class="label-text-alt text-xs text-info">
-                            💡 提示：输入数据库中已存在的 device_id，可以模拟该设备进行语音交互测试
+                            💡 提示：必须先在Echo Web注册设备才能使用
                         </span>
                     </label>
                 </div>
@@ -137,11 +137,6 @@
     </div>
 
     <script>
-        FingerprintJS.load().then(fp => fp.get()).then(result => {
-            window.visitorId = result.visitorId;
-            console.log("FingerprintJS Visitor ID:", window.visitorId);
-        });
-
         class AudioRecorder {
             constructor() {
                 this.isRecording = false;
@@ -173,6 +168,9 @@
                 this.hasEchoKitSession = false;
                 // 🔧 保存当前的 EchoKit 会话 ID（用于后续操作）
                 this.currentEchoKitSession = null;
+
+                // 🔧 ASR 去重：保存最后显示的 ASR 文本
+                this.lastDisplayedASR = '';
 
                 this.initializeElements();
                 this.bindEvents();
@@ -280,28 +278,26 @@
             connectWebSocket(addRecordParam = false) {
                 let url = this.wsUrlInput.value.trim();
                 if (!url) {
-                    this.addServerMessage('请输入 WebSocket 地址');
+                    this.addServerMessage('❌ 请输入 WebSocket 地址');
                     return;
                 }
                 url = url.endsWith('/') ? url : url + '/';
 
-                // 🔧 检查是否有自定义设备ID
-                const customDeviceId = this.deviceIdInput.value.trim();
-                let id = window.visitorId || crypto.randomUUID();
-                url = url + id;
-
-                // 构建查询参数
-                const queryParams = [];
-
-                // 添加录制模式参数
-                if (addRecordParam) {
-                    queryParams.push('record=true');
+                // ✅ 检查设备ID是否填写（必填）
+                const deviceId = this.deviceIdInput.value.trim();
+                if (!deviceId) {
+                    this.addServerMessage('❌ 请先填写设备 ID');
+                    this.deviceIdInput.focus();
+                    return;
                 }
 
-                // 添加自定义设备ID参数
-                if (customDeviceId) {
-                    queryParams.push('device_id=' + encodeURIComponent(customDeviceId));
-                    this.addServerMessage('🎯 使用自定义设备ID: ' + customDeviceId);
+                // ✅ 直接使用设备ID构建URL
+                url = url + deviceId;
+
+                // 构建查询参数（仅录制模式）
+                const queryParams = [];
+                if (addRecordParam) {
+                    queryParams.push('record=true');
                 }
 
                 // 拼接查询参数
@@ -309,17 +305,19 @@
                     url = url + '?' + queryParams.join('&');
                 }
 
+                this.addServerMessage('📡 正在连接设备: ' + deviceId);
+
                 try {
                     this.websocket = new WebSocket(url);
                     this.websocket.binaryType = 'arraybuffer'; // 设置为接收二进制数据
 
                     this.websocket.onopen = () => {
                         this.isConnected = true;
-                        this.updateConnectionStatus('connected', '已连接: ' + id);
+                        this.updateConnectionStatus('connected', '已连接: ' + deviceId);
                         this.connectBtn.textContent = '断开';
                         this.connectBtn.classList.remove('btn-primary');
                         this.connectBtn.classList.add('btn-error');
-                        this.addServerMessage('WebSocket 连接成功');
+                        this.addServerMessage('✅ WebSocket 连接成功');
 
                         // ✅ 首次连接时发送 StartChat，创建 EchoKit 会话并接收 Hello
                         if (!this.hasEchoKitSession && !addRecordParam) {
@@ -345,6 +343,8 @@
 
                         // 🔧 重置会话标记，下次连接时重新创建 EchoKit 会话
                         this.hasEchoKitSession = false;
+                        // 🔧 重置 ASR 去重状态
+                        this.lastDisplayedASR = '';
                     };
 
                     this.websocket.onerror = (error) => {
@@ -456,11 +456,24 @@
                             break;
                         case 'ASR':
                             // ✅ 修复：ASR结果显示为用户消息（右边）
-                            // 使用 setTimeout 确保在消息队列中的正确顺序
+                            // 🔧 添加去重逻辑：检查是否与上一次显示的 ASR 文本相同
                             const asrText = eventData[0] || '无内容';
-                            setTimeout(() => {
-                                this.addUserMessage(`🎤 ${asrText}`, debugInfo);
-                            }, 0);
+                            const trimmedASR = asrText.trim();
+
+                            if (trimmedASR !== this.lastDisplayedASR) {
+                                // 不重复，显示消息
+                                setTimeout(() => {
+                                    this.addUserMessage(`🎤 ${asrText}`, debugInfo);
+                                }, 0);
+                                // 更新最后显示的 ASR
+                                this.lastDisplayedASR = trimmedASR;
+                            } else {
+                                // 重复，跳过显示
+                                console.log('⚠️ Skipping duplicate ASR text:', asrText);
+                                if (this.debugMode) {
+                                    this.addServerMessage('⚠️ 检测到重复的 ASR 文本，已自动跳过', debugInfo);
+                                }
+                            }
                             break;
                         case 'Action':
                             this.addServerMessage(`⚡ 动作: ${eventData[0] || '无动作'}`, debugInfo);
@@ -925,6 +938,8 @@
 
             clearChat() {
                 this.chatMessages.innerHTML = '';
+                // 🔧 重置 ASR 去重状态
+                this.lastDisplayedASR = '';
             }
 
             scrollToBottom() {

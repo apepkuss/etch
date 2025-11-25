@@ -56,6 +56,7 @@ impl Default for BridgeConfig {
 struct BridgeService {
     config: BridgeConfig,
     echokit_manager: Arc<echokit_client::EchoKitConnectionManager>,
+    echokit_connection_pool: Arc<echokit::EchoKitConnectionPool>,  // 🎯 新增：连接池
     audio_processor: Arc<audio_processor::AudioProcessor>,
     udp_server: Arc<udp_server::UdpAudioServer>,
     mqtt_client: Arc<mqtt_client::BridgeMqttClient>,
@@ -143,30 +144,40 @@ async fn main() -> Result<()> {
     // 创建 ASR 回调通道（用于 EchoKit -> Adapter -> Device 的 ASR 结果路由）
     let (asr_callback_tx, asr_callback_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    // 创建 AI 回复回调通道（用于 EchoKit -> Adapter -> SessionManager 的 AI 回复路由）
+    let (response_callback_tx, response_callback_rx) = tokio::sync::mpsc::unbounded_channel();
+
     // 创建原始消息回调通道（用于直接转发 MessagePack 数据）
     let (raw_message_tx, raw_message_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // 创建 EchoKit 连接管理器（带音频、ASR 和原始消息回调）
-    let echokit_manager = Arc::new(echokit_client::EchoKitConnectionManager::new_with_all_callbacks(
-        config.echokit_websocket_url.clone(),
-        audio_callback_tx,
-        asr_callback_tx,
-        raw_message_tx,
+    // 🎯 创建 EchoKit 连接池（支持多个 EchoKit Server）
+    info!("🔧 Creating EchoKit Connection Pool...");
+    let echokit_connection_pool = Arc::new(echokit::EchoKitConnectionPool::new(
+        Arc::new(db_pool.clone()),
+        audio_callback_tx.clone(),
+        asr_callback_tx.clone(),
+        response_callback_tx.clone(),
+        raw_message_tx.clone(),
     ));
 
-    // 🚀 优化：预先连接到 EchoKit Server，避免首次会话创建时的连接延迟
-    info!("🔌 Pre-connecting to EchoKit Server...");
-    if let Err(e) = echokit_manager.get_client().connect().await {
-        warn!("⚠️ Failed to pre-connect to EchoKit Server: {}. Will retry on first session.", e);
-        // 不中断启动，首次会话创建时会自动连接
-    } else {
-        info!("✅ Pre-connected to EchoKit Server successfully");
-        info!("🎁 Hello messages cached and ready for instant delivery");
-    }
+    // ❌ 已移除预连接逻辑：按照新设计，仅在设备首次连接时才创建 EchoKit 连接
+    // 使用懒加载模式，根据每个设备注册时指定的 echokit_server_url 按需连接
+    info!("📋 EchoKit connection pool initialized (lazy loading mode)");
+
+    // TODO: 重构 AudioProcessor 以移除对单一 EchoKit client 的依赖
+    // 临时方案：创建一个 placeholder manager 用于 AudioProcessor
+    // ⚠️ 重要：必须配置回调，因为 EchoKitSessionAdapter 会使用这个 client 处理消息
+    let placeholder_manager = echokit_client::EchoKitConnectionManager::new_with_all_callbacks(
+        config.echokit_websocket_url.clone(),
+        audio_callback_tx.clone(),
+        asr_callback_tx.clone(),
+        response_callback_tx.clone(),
+        raw_message_tx.clone(),
+    );
 
     // 创建音频处理器
     let audio_processor = Arc::new(audio_processor::AudioProcessor::new(
-        echokit_manager.get_client(),
+        placeholder_manager.get_client(),
         audio_output_tx.clone(),
     ));
 
@@ -184,12 +195,15 @@ async fn main() -> Result<()> {
     let connection_manager = Arc::new(websocket::connection_manager::DeviceConnectionManager::new());
     let session_manager = Arc::new(websocket::session_manager::SessionManager::new());
 
-    // 创建 EchoKit 适配器（带音频、ASR 和原始消息接收器）
+    // 创建 EchoKit 适配器（带音频、ASR、AI回复 和原始消息接收器）
+    // TODO: EchoKitSessionAdapter 也需要重构以移除对单一 client 的依赖
     let echokit_adapter = Arc::new(echokit::EchoKitSessionAdapter::new(
-        echokit_manager.get_client(),
+        placeholder_manager.get_client(),
         connection_manager.clone(),
+        session_manager.clone(), // 🔧 传入 session_manager 用于保存 ASR 文本和 AI 回复
         audio_callback_rx,
         asr_callback_rx,
+        response_callback_rx,
         raw_message_rx,
     ));
 
@@ -203,6 +217,12 @@ async fn main() -> Result<()> {
     let echokit_adapter_clone = echokit_adapter.clone();
     tokio::spawn(async move {
         echokit_adapter_clone.start_asr_receiver().await;
+    });
+
+    // 启动 EchoKit AI 回复接收器
+    let echokit_adapter_clone = echokit_adapter.clone();
+    tokio::spawn(async move {
+        echokit_adapter_clone.start_response_receiver().await;
     });
 
     // 启动 EchoKit 原始消息接收器
@@ -226,7 +246,8 @@ async fn main() -> Result<()> {
     // 创建 Bridge 服务
     let bridge_service = BridgeService {
         config: config.clone(),
-        echokit_manager: echokit_manager.clone(),
+        echokit_manager: Arc::new(placeholder_manager),  // TODO: 移除此字段，完全使用连接池
+        echokit_connection_pool: echokit_connection_pool.clone(),  // 🎯 连接池（主要使用）
         audio_processor: audio_processor.clone(),
         udp_server: udp_server.clone(),
         mqtt_client: mqtt_client_arc.clone(),
@@ -339,9 +360,8 @@ impl BridgeService {
     ) -> Result<()> {
         // MQTT 客户端已在 main 中启动
 
-        // 启动 EchoKit 连接管理器
-        self.echokit_manager.start().await
-            .with_context(|| "Failed to start EchoKit connection manager")?;
+        // ❌ 已移除：不再预启动 EchoKit 连接，使用懒加载模式
+        // EchoKit 连接将在设备首次连接时按需创建（通过 echokit_connection_pool）
 
         // 启动 UDP 服务器
         self.udp_server.start().await
@@ -454,6 +474,7 @@ impl BridgeService {
         let connection_manager = self.connection_manager.clone();
         let session_manager = self.session_manager.clone();
         let echokit_adapter = self.echokit_adapter.clone();
+        let echokit_connection_pool_for_ws = self.echokit_connection_pool.clone();  // 🎯 在 spawn 外部 clone
 
         // 启动统一的 HTTP/WebSocket 服务器（健康检查、WebSocket、静态文件、API）
         let session_service_for_ws = self.session_service.clone();
@@ -485,6 +506,7 @@ impl BridgeService {
                     session_manager,
                     echokit_adapter,
                     session_service: session_service_for_ws,
+                    echokit_connection_pool: echokit_connection_pool_for_ws,  // 🎯 新增：连接池
                 });
 
             // Session API 路由
@@ -558,7 +580,9 @@ struct AppState {
 
 // 健康检查端点
 async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let echokit_connected = state.echokit_manager.get_client().is_connected().await;
+    // 使用懒加载模式，不再预连接 EchoKit Server
+    // echokit_connected 表示是否有任何活跃的 EchoKit 连接
+    let echokit_connected = false;  // TODO: 从连接池获取聚合状态
     let active_sessions = state.active_sessions.read().await.len();
 
     // 修改健康检查逻辑：只要服务启动就认为是健康的，不依赖外部 EchoKit Server
@@ -573,9 +597,9 @@ async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> 
 
 // 统计信息端点
 async fn get_stats(State(state): State<AppState>) -> Json<BridgeServiceStats> {
-    let echokit_client = state.echokit_manager.get_client();
-    let echokit_connected = echokit_client.is_connected().await;
-    let echokit_sessions = echokit_client.get_active_sessions_count().await;
+    // 使用懒加载模式，统计信息从连接池获取
+    let echokit_connected = false;  // TODO: 从连接池获取聚合状态
+    let echokit_sessions = 0;  // TODO: 从连接池聚合所有连接的会话数
     let active_sessions = state.active_sessions.read().await.len();
     let audio_sessions = state.audio_processor.get_active_sessions_count().await;
     let udp_stats = state.udp_server.get_stats().await;

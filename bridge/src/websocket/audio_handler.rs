@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::echokit::EchoKitSessionAdapter;
+use crate::echokit::{EchoKitSessionAdapter, EchoKitConnectionPool};
 use super::connection_manager::DeviceConnectionManager;
 use super::session_manager::SessionManager;
 use crate::session_service::SessionService;
@@ -22,6 +22,7 @@ pub struct AppState {
     pub session_manager: Arc<SessionManager>,
     pub echokit_adapter: Arc<EchoKitSessionAdapter>,
     pub session_service: Arc<SessionService>,
+    pub echokit_connection_pool: Arc<EchoKitConnectionPool>,  // 🎯 新增：连接池
 }
 
 /// WebSocket 升级处理器
@@ -38,10 +39,11 @@ pub async fn websocket_handler(
     ws.on_upgrade(move |socket| handle_device_websocket(socket, device_id, false, state))
 }
 
-/// WebSocket 升级处理器（带 visitor_id 和 record 参数）
+/// WebSocket 升级处理器（简化版 - 直接使用 device_id）
+/// 新的 URL 格式：ws://localhost:10031/{device_id}?record=true
 pub async fn websocket_handler_with_id(
     ws: WebSocketUpgrade,
-    Path(visitor_id): Path<String>,
+    Path(device_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Response {
@@ -51,45 +53,10 @@ pub async fn websocket_handler_with_id(
         .map(|v| v == "true")
         .unwrap_or(false);
 
-    // 🔧 从查询参数中提取自定义 device_id（如果提供）
-    let custom_device_id = params.get("device_id").map(|s| s.as_str());
-
     info!(
-        "Client {} connecting (record_mode: {}, custom_device_id: {:?})",
-        visitor_id, record_mode, custom_device_id
+        "Device {} connecting (record_mode: {})",
+        device_id, record_mode
     );
-
-    // 如果提供了自定义 device_id，直接使用（不验证是否存在于数据库）
-    let device_id = if let Some(custom_id) = custom_device_id {
-        info!("Using custom device_id: {}", custom_id);
-        custom_id.to_string()
-    } else {
-        // 否则，确保设备记录存在（自动创建如果不存在）
-        match state
-            .session_service
-            .ensure_device_exists(&visitor_id, Some(&format!("WebUI-{}", &visitor_id[..8])))
-            .await
-        {
-            Ok(uuid) => {
-                let device_id = uuid.to_string();
-                info!(
-                    "Device {} (visitor: {}) registered successfully",
-                    device_id, visitor_id
-                );
-                device_id
-            }
-            Err(e) => {
-                error!("Failed to ensure device exists for {}: {}", visitor_id, e);
-                // 返回错误响应
-                return ws.on_upgrade(|mut socket| async move {
-                    let _ = socket
-                        .send(Message::Text(format!("Error: Failed to register device: {}", e).into()))
-                        .await;
-                    let _ = socket.close().await;
-                });
-            }
-        }
-    };
 
     ws.on_upgrade(move |socket| {
         handle_device_websocket(socket, device_id, record_mode, state)
@@ -115,6 +82,20 @@ async fn handle_device_websocket(
     }
 
     info!("Device {} WebSocket connected (record_mode: {})", device_id, record_mode);
+
+    // 🎯 2. 自动预加载设备的 EchoKit 连接（异步后台任务，不阻塞主流程）
+    let pool = state.echokit_connection_pool.clone();
+    let device_id_for_preload = device_id.clone();
+    tokio::spawn(async move {
+        match pool.get_connection_for_device(&device_id_for_preload).await {
+            Ok(_) => {
+                info!("✅ Pre-loaded EchoKit connection for device {}", device_id_for_preload);
+            }
+            Err(e) => {
+                warn!("⚠️ Failed to pre-load EchoKit connection for device {}: {}. Will retry on first session.", device_id_for_preload, e);
+            }
+        }
+    });
 
     // 2. 当前活跃会话 ID
     let mut active_session: Option<String> = None;
@@ -214,9 +195,70 @@ async fn handle_device_websocket(
         }
     }
 
-    // 4. 清理连接
+    // 4. 清理连接并持久化会话数据
     if let Some(session_id) = active_session {
+        // 🔧 方案B：从内存中获取完整的对话转录文本和 AI 回复
+        let full_transcript = state.session_manager.get_full_transcript(&session_id).await;
+        let full_response = state.session_manager.get_full_response(&session_id).await;
+
+        if let Some(transcript) = &full_transcript {
+            info!("💾 Session {} has {} characters of user transcription to save",
+                  session_id, transcript.len());
+        } else {
+            info!("ℹ️ Session {} has no user transcription content", session_id);
+        }
+
+        if let Some(response) = &full_response {
+            info!("💾 Session {} has {} characters of AI responses to save",
+                  session_id, response.len());
+        } else {
+            info!("ℹ️ Session {} has no AI response content", session_id);
+        }
+
+        // 更新内存会话状态
         let _ = state.session_manager.end_session(&session_id).await;
+
+        // 🔧 方案B：异步更新数据库（包含完整对话内容和 AI 回复）
+        let session_service = state.session_service.clone();
+        let session_id_for_db = session_id.clone();
+        tokio::spawn(async move {
+            match session_service
+                .update_session(
+                    &session_id_for_db,
+                    echo_shared::database::SessionStatus::Completed,
+                    full_transcript,  // 完整的多轮对话转录文本
+                    full_response,    // 完整的多轮 AI 回复文本
+                    None,             // audio_url: 暂不保存
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!("✅ Session {} saved to database with complete conversation and AI responses", session_id_for_db);
+                }
+                Err(e) => {
+                    error!("❌ Failed to save session {} to database: {}", session_id_for_db, e);
+                }
+            }
+        });
+
+        // 🔧 修复：异步清理 EchoKit 会话，避免阻塞 WebSocket 关闭
+        // 使用 tokio::spawn 在后台执行清理，不等待完成
+        let adapter = state.echokit_adapter.clone();
+        let session_id_clone = session_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = adapter.close_echokit_session(&session_id_clone).await {
+                error!("Failed to close EchoKit session {} on disconnect: {}", session_id_clone, e);
+            } else {
+                info!("✅ Closed EchoKit session {} on disconnect", session_id_clone);
+            }
+        });
+    }
+
+    // 🔧 修复：清空设备级 EchoKit 会话变量
+    // 这样下次连接时会创建新的 EchoKit 会话，而不是复用旧的
+    if device_echokit_session.is_some() {
+        info!("🧹 Clearing device-level EchoKit session for device {}", device_id);
+        // device_echokit_session = None; // 这行代码不需要，因为函数即将结束
     }
 
     let _ = state.connection_manager.remove_device(&device_id).await;
@@ -454,7 +496,22 @@ async fn handle_client_command(
                 session_id
             );
 
-            // 绑定会话到设备
+            // 🔧 修复：持久化会话到数据库
+            if let Err(e) = state.session_service
+                .create_session(
+                    &session_id,
+                    device_id,
+                    None, // user_id: 暂时为 None，WebUI 没有用户认证
+                    None, // wake_reason: 暂时为 None
+                )
+                .await
+            {
+                error!("Failed to create session {} in database: {}", session_id, e);
+            } else {
+                info!("✅ Session {} saved to database", session_id);
+            }
+
+            // 绑定会话到内存管理器
             state.session_manager
                 .create_session(session_id.clone(), device_id.to_string())
                 .await?;
