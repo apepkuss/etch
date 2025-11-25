@@ -18,6 +18,7 @@ pub struct CreateDeviceRequest {
     pub name: String,
     pub device_type: DeviceType,
     pub location: String,
+    pub echokit_server_url: String,  // 必填：EchoKit Server URL
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +123,7 @@ pub async fn create_device(
         last_seen: now_utc(),
         is_online: false,
         owner: "user001".to_string(), // TODO: 从认证信息中获取
-        echokit_server_url: None,
+        echokit_server_url: Some(payload.echokit_server_url),  // 使用请求中的必填 URL
     };
 
     match app_state.database.create_device(

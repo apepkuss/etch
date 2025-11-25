@@ -455,7 +455,7 @@ impl Database {
             echo_shared::Session {
                 id: "session-001".to_string(),
                 device_id: "device-001".to_string(),
-                user_id: "admin-001".to_string(),
+                user_id: Some("admin-001".to_string()),
                 start_time: chrono::Utc::now(),
                 end_time: Some(chrono::Utc::now()),
                 duration: Some(120),

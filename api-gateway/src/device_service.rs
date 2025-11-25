@@ -155,7 +155,7 @@ impl DeviceService {
             return Ok(Some(device));
         }
 
-        // 从数据库查询
+        // 从数据库查询 - 直接使用字符串 ID（数据库使用 VARCHAR）
         let record = sqlx::query_as!(
             DeviceRecord,
             r#"
@@ -165,8 +165,7 @@ impl DeviceService {
             FROM devices
             WHERE id = $1
             "#,
-            Uuid::parse_str(device_id)
-                .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?
+            device_id
         )
         .fetch_optional(self.db.as_ref())
         .await
@@ -191,7 +190,8 @@ impl DeviceService {
         request: CreateDeviceRequest,
         owner_id: &str,
     ) -> Result<Device> {
-        let device_id = Uuid::new_v4();
+        // 生成自定义格式的设备 ID（或使用 UUID 字符串形式）
+        let device_id = Uuid::new_v4().to_string();
 
         let record = sqlx::query_as!(
             DeviceRecord,
@@ -207,8 +207,7 @@ impl DeviceService {
             request.device_type as DeviceType,
             request.location,
             request.firmware_version,
-            Uuid::parse_str(owner_id)
-                .map_err(|_| DatabaseError::InvalidInput("Invalid owner ID".to_string()))?
+            owner_id
         )
         .fetch_one(self.db.as_ref())
         .await
@@ -228,9 +227,7 @@ impl DeviceService {
         device_id: &str,
         request: UpdateDeviceRequest,
     ) -> Result<Option<Device>> {
-        let device_uuid = Uuid::parse_str(device_id)
-            .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
-
+        // 直接使用字符串 ID（数据库使用 VARCHAR）
         let record = sqlx::query_as!(
             DeviceRecord,
             r#"
@@ -249,7 +246,7 @@ impl DeviceService {
             request.location,
             request.volume,
             request.config,
-            device_uuid
+            device_id
         )
         .fetch_optional(self.db.as_ref())
         .await
@@ -280,9 +277,7 @@ impl DeviceService {
         last_seen: Option<chrono::DateTime<chrono::Utc>>,
         is_online: Option<bool>,
     ) -> Result<bool> {
-        let device_uuid = Uuid::parse_str(device_id)
-            .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
-
+        // 直接使用字符串 ID（数据库使用 VARCHAR）
         let result = sqlx::query!(
             r#"
             UPDATE devices
@@ -299,7 +294,7 @@ impl DeviceService {
             volume,
             last_seen,
             is_online,
-            device_uuid
+            device_id
         )
         .execute(self.db.as_ref())
         .await
@@ -332,17 +327,14 @@ impl DeviceService {
 
     /// 删除设备
     pub async fn delete_device(&self, device_id: &str, owner_id: &str) -> Result<bool> {
-        let device_uuid = Uuid::parse_str(device_id)
-            .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?;
-
         // 获取设备信息用于缓存清理
         let device = self.get_device_by_id(device_id).await?;
 
+        // 直接使用字符串 ID（数据库使用 VARCHAR）
         let result = sqlx::query!(
             "DELETE FROM devices WHERE id = $1 AND owner_id = $2",
-            device_uuid,
-            Uuid::parse_str(owner_id)
-                .map_err(|_| DatabaseError::InvalidInput("Invalid owner ID".to_string()))?
+            device_id,
+            owner_id
         )
         .execute(self.db.as_ref())
         .await
@@ -366,10 +358,10 @@ impl DeviceService {
         user_id: &str,
         device_id: &str,
     ) -> Result<bool> {
+        // 直接使用字符串 ID（数据库使用 VARCHAR）
         let record = sqlx::query!(
             "SELECT owner_id FROM devices WHERE id = $1",
-            Uuid::parse_str(device_id)
-                .map_err(|_| DatabaseError::InvalidInput("Invalid device ID".to_string()))?
+            device_id
         )
         .fetch_optional(self.db.as_ref())
         .await
@@ -377,8 +369,7 @@ impl DeviceService {
 
         match record {
             Some(device) => {
-                let owner_id = device.owner_id.to_string();
-                Ok(owner_id == user_id)
+                Ok(device.owner_id == user_id)
             }
             None => Ok(false),
         }
@@ -386,6 +377,7 @@ impl DeviceService {
 
     /// 获取设备统计信息
     pub async fn get_device_stats(&self, user_id: &str) -> Result<DeviceStats> {
+        // 直接使用字符串 ID（数据库使用 VARCHAR）
         let stats = sqlx::query!(
             r#"
             SELECT
@@ -398,8 +390,7 @@ impl DeviceService {
             FROM devices
             WHERE owner_id = $1
             "#,
-            Uuid::parse_str(user_id)
-                .map_err(|_| DatabaseError::InvalidInput("Invalid user ID".to_string()))?
+            user_id
         )
         .fetch_one(self.db.as_ref())
         .await
@@ -418,7 +409,7 @@ impl DeviceService {
     // 辅助方法：将数据库记录转换为Device结构
     fn record_to_device(&self, record: DeviceRecord) -> Device {
         Device {
-            id: record.id.to_string(),
+            id: record.id,  // DeviceRecord.id 已经是 String 类型
             name: record.name,
             device_type: record.device_type,
             status: record.status,
@@ -428,7 +419,7 @@ impl DeviceService {
             volume: record.volume,
             last_seen: record.last_seen,
             is_online: record.is_online,
-            owner: record.owner_id.to_string(),
+            owner: record.owner_id,  // DeviceRecord.owner_id 已经是 String 类型
         }
     }
 }
