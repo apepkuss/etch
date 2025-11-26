@@ -19,6 +19,8 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - '.github/**'
+      - 'tests/echokit-server/**'
   schedule:
     - cron: '0 18 * * *'
   workflow_dispatch:
@@ -504,7 +506,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-${{ matrix.test-script }}-logs
+          name: integration-test-${{ matrix.test-script }}-${{ github.run_id }}-logs
           path: |
             service-logs-${{ matrix.test-script }}.txt
             bridge-detailed-logs.txt
@@ -540,8 +542,8 @@ jobs:
           echo "- Bridge-EchoKit 集成测试: ✅ 通过" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📊 优化效果" >> $GITHUB_STEP_SUMMARY
-          echo "- Job 数量: 10个 → 4个 (减少60%)" >> $GITHUB_STEP_SUMMARY
-          echo "- 执行效率: 提升30-40%" >> $GITHUB_STEP_SUMMARY
+          echo "- Job 数量: 4个 (优化完成)" >> $GITHUB_STEP_SUMMARY
+          echo "- 并行构建: API Gateway, Bridge, Web Management" >> $GITHUB_STEP_SUMMARY
           echo "- 资源利用: 显著优化" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📝 后续计划" >> $GITHUB_STEP_SUMMARY
