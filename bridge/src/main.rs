@@ -87,6 +87,10 @@ struct SessionInfo {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 加载 .env 文件（如果存在）
+    // 注意：系统环境变量优先级高于 .env 文件
+    dotenvy::dotenv().ok();
+
     // 初始化日志
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -524,7 +528,7 @@ impl BridgeService {
                 .merge(health_router)
                 .merge(ws_router)
                 .merge(api_router)
-                .fallback_service(ServeDir::new("bridge/resources"));
+                .fallback_service(ServeDir::new("resources"));
 
             info!("HTTP/WebSocket server listening on: {}", bind_address);
             info!("  - Health check: http://{}/health", bind_address);
