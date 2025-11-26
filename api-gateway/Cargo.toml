@@ -57,9 +57,5 @@ echo-shared = { path = "../shared" }
 name = "echo-api-gateway"
 path = "src/main.rs"
 
-[[bin]]
-name = "mvp_demo"
-path = "src/mvp_demo.rs"
-
 [dev-dependencies]
 tempfile = "3.8"

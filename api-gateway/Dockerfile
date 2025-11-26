@@ -37,7 +37,6 @@ RUN useradd -m -u 1000 gateway
 WORKDIR /app
 
 # 从构建阶段复制编译后的二进制文件
-COPY --from=builder /app/target/release/mvp_demo /usr/local/bin/
 COPY --from=builder /app/target/release/echo-api-gateway /usr/local/bin/
 
 # 更改文件所有权
