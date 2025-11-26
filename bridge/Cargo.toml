@@ -72,9 +72,5 @@ echo-shared = { path = "../shared" }
 [build-dependencies]
 tonic-build = "0.11"
 
-[[bin]]
-name = "bridge_simple_test"
-path = "src/bridge_simple_test.rs"
-
 [dev-dependencies]
 tempfile = "3.8"
