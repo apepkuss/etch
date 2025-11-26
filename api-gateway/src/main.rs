@@ -47,6 +47,10 @@ use websocket::websocket_handler;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 加载 .env 文件（如果存在）
+    // 注意：系统环境变量优先级高于 .env 文件
+    dotenvy::dotenv().ok();
+
     // 初始化日志
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
