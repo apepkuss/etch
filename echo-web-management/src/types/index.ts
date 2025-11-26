@@ -197,6 +197,7 @@ export interface DeviceRegistrationRequest {
   device_id?: string;           // 生成的设备ID ECHO_SN_MAC
   serial_number?: string;       // 设备序列号
   mac_address?: string;         // MAC地址
+  echokit_server_url: string;   // EchoKit 服务器 URL（必填）
 }
 
 export interface DeviceRegistrationResponse {

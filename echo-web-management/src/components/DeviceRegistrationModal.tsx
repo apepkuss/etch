@@ -290,6 +290,7 @@ const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = ({
         device_id: deviceId, // 添加device_id
         serial_number: values.serial_number, // 添加SN
         mac_address: values.mac_address, // 添加MAC
+        echokit_server_url: values.echokit_server_url, // 添加 EchoKit Server URL
       };
 
       console.log('发送注册请求:', request);
