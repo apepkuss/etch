@@ -36,6 +36,9 @@ logs/
 # EchoKit Server
 echokit_server/
 
+# EchoKit Box
+echokit_box/
+
 # Docker
 .dockerignore
 
